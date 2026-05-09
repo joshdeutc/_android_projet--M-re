@@ -1,0 +1,12 @@
+{
+  "limits": [
+    {
+      "package": "tv.arte.plus7",
+      "max_minutes_per_day": 60,
+      "max_seconds_per_day": 3600,
+      "allowed_days": "*",
+      "allowed_hours": "*"
+    }
+  ],
+  "period_blocks": []
+}

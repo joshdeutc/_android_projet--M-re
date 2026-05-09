@@ -1,0 +1,17 @@
+# Build artifacts
+**/build/
+**/.gradle/
+**/.idea/
+
+# Logs
+*.log
+*.txt.bak
+platform-tools/log*.txt
+platform-tools/logcat*.txt
+
+# Local APKs (keep only in releases)
+platform-tools/*.apk
+
+# OS
+.DS_Store
+Thumbs.db

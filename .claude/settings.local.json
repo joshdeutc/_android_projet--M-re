@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(./gradlew.bat assembleDebug)",
+      "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\jo\\\\Documents\\\\_android_projet- Mère\" -Recurse -Directory)",
+      "Bash(Select-Object -ExpandProperty FullName)",
+      "PowerShell(adb devices *)",
+      "PowerShell(& \"C:\\\\Users\\\\jo\\\\Documents\\\\_android_projet- Mère\\\\platform-tools\\\\adb.exe\" devices)",
+      "PowerShell(& \"C:\\\\Users\\\\jo\\\\Documents\\\\_android_projet- Mère\\\\platform-tools\\\\adb.exe\" install -r \"C:\\\\Users\\\\jo\\\\Documents\\\\_android_projet- Mère\\\\selfcontrol-ultimate\\\\app\\\\build\\\\outputs\\\\apk\\\\debug\\\\app-debug.apk\")",
+      "PowerShell(& \"C:\\\\Users\\\\jo\\\\Documents\\\\_android_projet- Mère\\\\platform-tools\\\\adb.exe\" shell am broadcast -a com.jo.selfcontrol.ultimate.ALLOW_INSTALL -p com.jo.selfcontrol.ultimate)",
+      "PowerShell(& \"C:\\\\Users\\\\jo\\\\Documents\\\\_android_projet- Mère\\\\platform-tools\\\\adb.exe\" install -r -t \"C:\\\\Users\\\\jo\\\\Documents\\\\_android_projet- Mère\\\\selfcontrol-ultimate\\\\app\\\\build\\\\outputs\\\\apk\\\\debug\\\\app-debug.apk\")"
+    ]
+  }
+}

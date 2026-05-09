@@ -1,0 +1,157 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- Démarrer au boot -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
+    <!-- Schedule exact alarms to ensure service stays alive -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+
+    <!-- Foreground service -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+
+    <!-- Stats d'usage (Device Owner peut s'auto-accorder) -->
+    <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS"
+        android:protectionLevel="signature|privileged|appop" />
+
+    <!-- Voir tous les packages -->
+    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
+
+    <!-- Notification (Android 13+) -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- DND / interruption filter control (used during Nuclear mode) -->
+    <uses-permission android:name="android.permission.ACCESS_NOTIFICATION_POLICY" />
+
+    <!-- Samsung Device Owner (Knox) -->
+    <uses-permission android:name="com.sec.enterprise.permission.CUSTOM_PROKIOSK" />
+    <uses-permission android:name="android.permission.MANAGE_DEVICE_ADMINS" />
+
+    <application
+        android:testOnly="true"
+        android:label="@string/app_name"
+        android:supportsRtl="true">
+
+        <!-- ════════════════════════════════════════════ -->
+        <!-- Launcher Activity — démarre le service      -->
+        <!-- ════════════════════════════════════════════ -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- ════════════════════════════════════════════ -->
+        <!-- Device Admin Receiver (point d'entrée DO)   -->
+        <!-- ════════════════════════════════════════════ -->
+        <receiver
+            android:name=".AdminReceiver"
+            android:permission="android.permission.BIND_DEVICE_ADMIN"
+            android:exported="true">
+            <meta-data
+                android:name="android.app.device_admin"
+                android:resource="@xml/device_admin" />
+            <intent-filter>
+                <action android:name="android.app.action.DEVICE_ADMIN_ENABLED" />
+            </intent-filter>
+        </receiver>
+
+        <!-- ════════════════════════════════════════════ -->
+        <!-- Boot Receiver — démarre le service au boot  -->
+        <!-- ════════════════════════════════════════════ -->
+        <receiver
+            android:name=".BootReceiver"
+            android:directBootAware="true"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
+                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+                <action android:name="com.htc.intent.action.QUICKBOOT_POWERON" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Watchdog: periodic alarm to ensure LimitService stays alive -->
+        <receiver
+            android:name=".WatchdogReceiver"
+            android:exported="false" />
+
+        <!-- ════════════════════════════════════════════ -->
+        <!-- Command Receiver — reçoit les commandes adb -->
+        <!-- ════════════════════════════════════════════ -->
+        <receiver
+            android:name=".CommandReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.jo.selfcontrol.ultimate.REMOVE_OWNER" />
+                <action android:name="com.jo.selfcontrol.ultimate.STATUS" />
+                <action android:name="com.jo.selfcontrol.ultimate.ALLOW_INSTALL" />
+                <action android:name="com.jo.selfcontrol.ultimate.BLOCK_INSTALL" />
+                <action android:name="com.jo.selfcontrol.ultimate.UNSUSPEND_ALL" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Debug-only automation hooks (ignored in release builds at runtime) -->
+        <receiver
+            android:name=".TestAutomationReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.jo.selfcontrol.ultimate.TEST_SET_CURFEW_MUTE" />
+                <action android:name="com.jo.selfcontrol.ultimate.TEST_CLEAR_CURFEW" />
+                <action android:name="com.jo.selfcontrol.ultimate.TEST_SET_APP_LIMIT" />
+                <action android:name="com.jo.selfcontrol.ultimate.TEST_CLEAR_APP_LIMIT" />
+            </intent-filter>
+        </receiver>
+
+        <receiver
+            android:name=".BlockedNotificationChoiceReceiver"
+            android:exported="false" />
+
+        <!-- ════════════════════════════════════════════ -->
+        <!-- Foreground Service — cœur du monitoring     -->
+        <!-- ════════════════════════════════════════════ -->
+        <service
+            android:name=".LimitService"
+            android:directBootAware="true"
+            android:foregroundServiceType="specialUse"
+            android:exported="false">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Device management and app usage monitoring for self-control" />
+        </service>
+
+        <!-- ════════════════════════════════════════════ -->
+        <!-- Accessibility Service — détection temps réel -->
+        <!-- ════════════════════════════════════════════ -->
+        <service
+            android:name=".AppWatcherService"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service_config" />
+        </service>
+
+        <!-- ════════════════════════════════════════════ -->
+        <!-- Notification Listener — mute blocked apps   -->
+        <!-- ════════════════════════════════════════════ -->
+        <service
+            android:name=".SelfControlNotificationListener"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+
+    </application>
+
+</manifest>

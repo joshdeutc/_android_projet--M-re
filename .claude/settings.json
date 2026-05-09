@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(./gradlew assembleDebug)",
+      "Bash(adb devices *)",
+      "Read(//c/Users/jo/.maestro/tests/2026-04-16_180210/**)",
+      "Read(//c/Users/jo/.maestro/tests/2026-04-16_180325/**)",
+      "PowerShell(cmd /c \"dir /a C:\\\\Users\\\\jo\\\\Downloads\\\\chrome_extracted\")",
+      "PowerShell(& \"C:\\\\Users\\\\jo\\\\Documents\\\\_android_projet- M�re\\\\platform-tools\\\\adb.exe\" shell am broadcast -a com.jo.selfcontrol.ultimate.ALLOW_INSTALL -p com.jo.selfcontrol.ultimate)",
+      "PowerShell(& \"C:\\\\Users\\\\jo\\\\Documents\\\\_android_projet- M�re\\\\platform-tools\\\\adb.exe\" shell getprop ro.product.cpu.abi)",
+      "PowerShell(& \"C:\\\\Users\\\\jo\\\\Documents\\\\_android_projet- M�re\\\\platform-tools\\\\adb.exe\" devices)"
+    ]
+  }
+}
