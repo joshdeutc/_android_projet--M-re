@@ -25,7 +25,7 @@ Tournant en arrière-plan, le service d'accès (`AppWatcherService`) soutient l'
 - **Quota quotidien** (`maxSecondsPerDay`) — usage cumulé via `UsageStatsManager`, reset à 02h00 (jour logique).
 - **Curfew / Period blocks** — plages horaires interdites, indépendantes du quota. Peut couper aussi les notifications (`SelfControlNotificationListener`).
 - **Allowed days / hours** — restrictions par jour de semaine et plage horaire.
-- **Nuclear Mode** — blocage temporaire renforcé d'un set d'apps avec DND priorité activée pour couper aussi les notifs. État persisté via `NuclearManager`. Utilise `setApplicationHidden()` en plus de la suspension.
+- **Nuclear Mode** — blocage temporaire renforcé d'un set d'apps. État persisté via `NuclearManager`. Utilise `setApplicationHidden()` en plus de la suspension. Presets nommés (apps + durée) gérés par `NuclearPresetsManager` — voir `docs/NUCLEAR_PRESETS.md`. **Note :** l'override DND a été retiré (2026-05-11) pour respecter les exceptions Android définies par l'utilisateur ; le blocage des notifs reste assuré par `SelfControlNotificationListener` quand actif.
 
 ## Robustesse au redémarrage
 
