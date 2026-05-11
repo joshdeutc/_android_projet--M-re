@@ -235,11 +235,24 @@ class MainActivity : Activity() {
             setTextColor(Color.WHITE)
             background = roundedBackground(Color.parseColor("#D32F2F"))
             setPadding(dp(16), dp(12), dp(16), dp(12))
-            setOnClickListener { showNuclearSetupDialog() }
+            setOnClickListener { startNuclearActivationFlow() }
         }
         nuclearSetupContainer.addView(nuclearButton, LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
         ).apply { topMargin = dp(8) })
+
+        val managePresetsButton = Button(this).apply {
+            text = "Manage Presets"
+            textSize = 14f
+            setTextColor(Color.WHITE)
+            background = roundedBackground(Color.parseColor("#424242"))
+            setPadding(dp(16), dp(10), dp(16), dp(10))
+            setOnClickListener { showManagePresetsDialog() }
+        }
+        nuclearSetupContainer.addView(managePresetsButton, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        ).apply { topMargin = dp(8) })
+
         mainLayout.addView(nuclearSetupContainer)
 
         root.addView(mainLayout)
@@ -1437,13 +1450,181 @@ class MainActivity : Activity() {
 
         val dialog = AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog)
             .setTitle("Confirm Nuclear Mode")
-            .setMessage("Block ${selectedNuclearApps.size} app(s) for $durationText?\n\n$appNames\n\n🔇 Do Not Disturb will be activated (calls & alarms still allowed).\n\nThis action is IRREVERSIBLE.")
+            .setMessage(
+                "Block ${selectedNuclearApps.size} app(s) for $durationText?\n\n" +
+                "$appNames\n\n" +
+                "⚠️ Do Not Disturb will be LOCKED ON for the whole duration — you won't be able to turn it off.\n\n" +
+                "Configure your DND exceptions (priority contacts, alarms, calls…) NOW in Android Settings > Sound > Do Not Disturb before confirming.\n\n" +
+                "This action is IRREVERSIBLE."
+            )
             .setPositiveButton("BLOCK") { _, _ ->
                 LimitService.startNuclearMode(
                     selectedNuclearApps.toList(),
                     selectedDurationMs
                 )
                 Toast.makeText(this, "Nuclear Mode Activated!", Toast.LENGTH_SHORT).show()
+            }
+            .setNeutralButton("💾 Save as preset", null)
+            .setNegativeButton("Cancel", null)
+            .create()
+        styleDialogForDarkTheme(dialog)
+        dialog.show()
+        // Override default dismiss-on-click so saving keeps the confirm dialog open.
+        // Must be set after show() because the buttons are only created then.
+        dialog.getButton(AlertDialog.BUTTON_NEUTRAL)?.setOnClickListener {
+            showSavePresetDialog(selectedNuclearApps.toList(), selectedDurationMs)
+        }
+    }
+
+    // ──────────────────────────────────────
+    //  Nuclear Mode Presets
+    // ──────────────────────────────────────
+
+    private fun startNuclearActivationFlow() {
+        val presets = NuclearPresetsManager.loadPresets(this)
+        if (presets.isEmpty()) {
+            showNuclearSetupDialog()
+            return
+        }
+
+        val labels = mutableListOf<String>()
+        labels.add("➕ Configure new…")
+        for (p in presets) {
+            labels.add("• ${p.name}  (${p.packages.size} apps, ${formatTime((p.durationMs / 1000).toInt())})")
+        }
+
+        val dialog = AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog)
+            .setTitle("Activate Nuclear Mode")
+            .setItems(labels.toTypedArray()) { _, which ->
+                if (which == 0) {
+                    showNuclearSetupDialog()
+                } else {
+                    val preset = presets[which - 1]
+                    applyPresetAndConfirm(preset)
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .create()
+        styleDialogForDarkTheme(dialog)
+        dialog.show()
+    }
+
+    private fun applyPresetAndConfirm(preset: NuclearPresetsManager.Preset) {
+        val installed = getInstalledLaunchableApps().map { it.packageName }.toSet()
+        val available = preset.packages.filter { it in installed }
+        val missing = preset.packages.size - available.size
+
+        selectedNuclearApps.clear()
+        selectedNuclearApps.addAll(available)
+        selectedDurationMs = preset.durationMs
+
+        if (selectedNuclearApps.isEmpty()) {
+            Toast.makeText(this, "Preset apps are not installed on this device", Toast.LENGTH_LONG).show()
+            return
+        }
+        if (missing > 0) {
+            Toast.makeText(this, "$missing app(s) from preset not installed — skipped", Toast.LENGTH_SHORT).show()
+        }
+        confirmNuclearActivation()
+    }
+
+    private fun showSavePresetDialog(packages: List<String>, durationMs: Long) {
+        val input = EditText(this).apply {
+            hint = "Preset name"
+            setTextColor(Color.WHITE)
+            setHintTextColor(Color.parseColor("#888888"))
+            setPadding(dp(16), dp(12), dp(16), dp(12))
+        }
+
+        val dialog = AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog)
+            .setTitle("Save as preset")
+            .setMessage("Save this selection (${packages.size} apps, ${formatTime((durationMs / 1000).toInt())}) for one-tap reuse.")
+            .setView(input)
+            .setPositiveButton("Save") { _, _ ->
+                val name = input.text.toString().trim()
+                if (name.isEmpty()) {
+                    Toast.makeText(this, "Name required", Toast.LENGTH_SHORT).show()
+                    return@setPositiveButton
+                }
+                NuclearPresetsManager.upsertPreset(
+                    this,
+                    NuclearPresetsManager.Preset(name, packages, durationMs)
+                )
+                Toast.makeText(this, "Preset \"$name\" saved", Toast.LENGTH_SHORT).show()
+            }
+            .setNegativeButton("Cancel", null)
+            .create()
+        styleDialogForDarkTheme(dialog)
+        dialog.show()
+    }
+
+    private fun showManagePresetsDialog() {
+        val presets = NuclearPresetsManager.loadPresets(this)
+        if (presets.isEmpty()) {
+            Toast.makeText(this, "No presets saved yet", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        val labels = presets.map {
+            "${it.name}  (${it.packages.size} apps, ${formatTime((it.durationMs / 1000).toInt())})"
+        }.toTypedArray()
+
+        val dialog = AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog)
+            .setTitle("Manage Presets")
+            .setItems(labels) { _, which ->
+                showPresetActionsDialog(presets[which])
+            }
+            .setNegativeButton("Close", null)
+            .create()
+        styleDialogForDarkTheme(dialog)
+        dialog.show()
+    }
+
+    private fun showPresetActionsDialog(preset: NuclearPresetsManager.Preset) {
+        val actions = arrayOf("Rename", "Delete")
+        val dialog = AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog)
+            .setTitle(preset.name)
+            .setItems(actions) { _, which ->
+                when (which) {
+                    0 -> showRenamePresetDialog(preset)
+                    1 -> confirmDeletePreset(preset)
+                }
+            }
+            .setNegativeButton("Back") { _, _ -> showManagePresetsDialog() }
+            .create()
+        styleDialogForDarkTheme(dialog)
+        dialog.show()
+    }
+
+    private fun showRenamePresetDialog(preset: NuclearPresetsManager.Preset) {
+        val input = EditText(this).apply {
+            setText(preset.name)
+            setTextColor(Color.WHITE)
+            setPadding(dp(16), dp(12), dp(16), dp(12))
+        }
+
+        val dialog = AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog)
+            .setTitle("Rename preset")
+            .setView(input)
+            .setPositiveButton("Save") { _, _ ->
+                val newName = input.text.toString().trim()
+                if (newName.isEmpty() || newName == preset.name) return@setPositiveButton
+                NuclearPresetsManager.renamePreset(this, preset.name, newName)
+                Toast.makeText(this, "Renamed to \"$newName\"", Toast.LENGTH_SHORT).show()
+            }
+            .setNegativeButton("Cancel", null)
+            .create()
+        styleDialogForDarkTheme(dialog)
+        dialog.show()
+    }
+
+    private fun confirmDeletePreset(preset: NuclearPresetsManager.Preset) {
+        val dialog = AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog)
+            .setTitle("Delete preset?")
+            .setMessage("Remove \"${preset.name}\" permanently?")
+            .setPositiveButton("Delete") { _, _ ->
+                NuclearPresetsManager.deletePreset(this, preset.name)
+                Toast.makeText(this, "Preset deleted", Toast.LENGTH_SHORT).show()
             }
             .setNegativeButton("Cancel", null)
             .create()

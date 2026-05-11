@@ -3,7 +3,6 @@ package com.jo.selfcontrol.ultimate
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
-import android.app.NotificationManager.Policy
 import android.app.PendingIntent
 import android.app.Service
 import android.app.admin.DevicePolicyManager
@@ -573,21 +572,8 @@ class LimitService : Service() {
             }
             val nm = getSystemService(NotificationManager::class.java)
             nm.setInterruptionFilter(NotificationManager.INTERRUPTION_FILTER_PRIORITY)
-            try {
-                val categories = Policy.PRIORITY_CATEGORY_CALLS or
-                    Policy.PRIORITY_CATEGORY_MESSAGES or
-                    Policy.PRIORITY_CATEGORY_ALARMS or
-                    Policy.PRIORITY_CATEGORY_REPEAT_CALLERS
-                nm.notificationPolicy = Policy(
-                    categories,
-                    Policy.PRIORITY_SENDERS_ANY,
-                    Policy.PRIORITY_SENDERS_ANY
-                )
-            } catch (e: Exception) {
-                Log.w(TAG, "☢️ Nuclear: could not set fine DND policy: ${e.message}")
-            }
             nuclearDndApplied = true
-            Log.i(TAG, "☢️ Nuclear: DND priority enabled (calls + alarms allowed)")
+            Log.i(TAG, "☢️ Nuclear: DND priority enabled (using user's own exceptions)")
         } catch (e: Exception) {
             Log.e(TAG, "☢️ Nuclear: Failed to enable DND priority: ${e.message}")
         }
