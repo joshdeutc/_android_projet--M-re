@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- DO-specific permissions (Samsung Knox + manage other admins) -->
+    <uses-permission android:name="com.sec.enterprise.permission.CUSTOM_PROKIOSK" />
+    <uses-permission android:name="android.permission.MANAGE_DEVICE_ADMINS" />
+
+    <application
+        android:testOnly="true"
+        tools:replace="android:testOnly">
+
+        <!-- DeviceAdminReceiver doubles as the Device Owner provisioning entry point. -->
+        <receiver
+            android:name=".AdminReceiver"
+            android:permission="android.permission.BIND_DEVICE_ADMIN"
+            android:exported="true">
+            <meta-data
+                android:name="android.app.device_admin"
+                android:resource="@xml/device_admin" />
+            <intent-filter>
+                <action android:name="android.app.action.DEVICE_ADMIN_ENABLED" />
+            </intent-filter>
+        </receiver>
+
+        <!-- adb-triggered DPM operations (REMOVE_OWNER, ALLOW_INSTALL, ...). DO-only. -->
+        <receiver
+            android:name=".CommandReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.jo.selfcontrol.ultimate.REMOVE_OWNER" />
+                <action android:name="com.jo.selfcontrol.ultimate.STATUS" />
+                <action android:name="com.jo.selfcontrol.ultimate.ALLOW_INSTALL" />
+                <action android:name="com.jo.selfcontrol.ultimate.BLOCK_INSTALL" />
+                <action android:name="com.jo.selfcontrol.ultimate.UNSUSPEND_ALL" />
+                <action android:name="com.jo.selfcontrol.ultimate.EXPORT_LOG" />
+                <action android:name="com.jo.selfcontrol.ultimate.CLEAR_LOG" />
+            </intent-filter>
+        </receiver>
+
+    </application>
+
+</manifest>

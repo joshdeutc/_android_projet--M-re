@@ -53,7 +53,19 @@ class ConfigManager {
         val allowedDays: List<Int>,     // 0=dim, 1=lun, ..., 6=sam
         val allowedHoursStart: Int,     // minutes depuis minuit (ex: 1080 = 18:00)
         val allowedHoursEnd: Int,       // minutes depuis minuit (ex: 1200 = 20:00)
-        val allDay: Boolean             // true si allowed_hours = "*"
+        val allDay: Boolean,            // true si allowed_hours = "*"
+        val session: SessionConfig? = null   // null = no per-unlock session limit
+    )
+
+    /**
+     * Discord-style per-unlock session limit. Lower priority than curfew & daily quota.
+     * Opening the app starts a session (sessionsUsed++); leaving the app or reaching
+     * sessionDurationSec ends it; cooldownSec must elapse before a new session can start.
+     */
+    data class SessionConfig(
+        val sessionDurationSec: Int,
+        val cooldownSec: Int,
+        val maxSessionsPerDay: Int
     )
 
     data class Config(
@@ -136,6 +148,13 @@ class ConfigManager {
                         limit.allowedHoursEnd / 60, limit.allowedHoursEnd % 60
                     )
                     put("allowed_hours", hours)
+                    limit.session?.let {
+                        put("session", JSONObject().apply {
+                            put("session_duration_sec", it.sessionDurationSec)
+                            put("cooldown_sec", it.cooldownSec)
+                            put("max_sessions_per_day", it.maxSessionsPerDay)
+                        })
+                    }
                 }
                 limitsArray.put(obj)
             }
@@ -181,7 +200,22 @@ class ConfigManager {
             for ((pkg, newLimit) in newMap) {
                 val oldLimit = oldMap[pkg] ?: continue  // new app added → stricter, no defer
                 if (newLimit.maxSecondsPerDay > oldLimit.maxSecondsPerDay) return true
+                if (isSessionRelaxation(oldLimit.session, newLimit.session)) return true
             }
+            return false
+        }
+
+        /**
+         * Session limit relaxation = removed entirely, OR more session time per unlock,
+         * OR less cooldown, OR more sessions per day. Any of these gives the user more
+         * access than before, so must go through the delay gate (no instant escape).
+         */
+        private fun isSessionRelaxation(old: SessionConfig?, new: SessionConfig?): Boolean {
+            if (old == null) return false                     // no prior limit → can only become stricter
+            if (new == null) return true                      // removed → relaxation
+            if (new.sessionDurationSec > old.sessionDurationSec) return true
+            if (new.cooldownSec < old.cooldownSec) return true
+            if (new.maxSessionsPerDay > old.maxSessionsPerDay) return true
             return false
         }
 
@@ -257,6 +291,15 @@ class ConfigManager {
                     endMinutes = parseTimeToMinutes(parts[1])
                 }
 
+                val sessionObj = obj.optJSONObject("session")
+                val sessionConfig = if (sessionObj != null) {
+                    SessionConfig(
+                        sessionDurationSec = sessionObj.getInt("session_duration_sec"),
+                        cooldownSec = sessionObj.getInt("cooldown_sec"),
+                        maxSessionsPerDay = sessionObj.getInt("max_sessions_per_day")
+                    )
+                } else null
+
                 limits.add(AppLimit(
                     packageName = pkg,
                     maxMinutesPerDay = maxMin,
@@ -264,7 +307,8 @@ class ConfigManager {
                     allowedDays = allowedDays,
                     allowedHoursStart = startMinutes,
                     allowedHoursEnd = endMinutes,
-                    allDay = allDay
+                    allDay = allDay,
+                    session = sessionConfig
                 ))
             }
 

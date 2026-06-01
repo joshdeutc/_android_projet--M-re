@@ -717,43 +717,100 @@ class MainActivity : Activity() {
     private fun showEditAppDialog(pkg: String) {
         val config = loadEditableConfig()
         val existingLimit = config.limits.find { it.packageName == pkg }
-        
-        var mins = existingLimit?.maxMinutesPerDay ?: 30
 
-        val layout = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER
+        val mins = existingLimit?.maxMinutesPerDay ?: 30
+        val existingSession = existingLimit?.session
+        val initialSessionMin = (existingSession?.sessionDurationSec ?: 300) / 60
+        val initialCooldownMin = (existingSession?.cooldownSec ?: 3600) / 60
+        val initialMaxSessions = existingSession?.maxSessionsPerDay ?: 5
+
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
             setPadding(dp(24), dp(16), dp(24), dp(16))
         }
 
-        val picker = NumberPicker(this).apply {
+        // ── Daily quota ──────────────────────────────
+        root.addView(TextView(this).apply {
+            text = "Daily quota"
+            textSize = 14f
+            setTextColor(Color.parseColor("#AAAAAA"))
+            setPadding(0, 0, 0, dp(4))
+        })
+        val dailyRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        val dailyPicker = NumberPicker(this).apply {
             minValue = 0
             maxValue = 1440
             value = mins
             wrapSelectorWheel = false
         }
-        layout.addView(picker)
-        layout.addView(TextView(this).apply {
+        dailyRow.addView(dailyPicker)
+        dailyRow.addView(TextView(this).apply {
             text = " mins/day"
             textSize = 16f
             setTextColor(Color.WHITE)
             setPadding(dp(8), 0, 0, 0)
         })
+        root.addView(dailyRow)
+
+        // ── Session limit (optional) ─────────────────
+        val sessionToggle = CheckBox(this).apply {
+            text = "Session limit (Discord/NoTube style)"
+            setTextColor(Color.WHITE)
+            isChecked = existingSession != null
+            setPadding(0, dp(20), 0, dp(4))
+        }
+        root.addView(sessionToggle)
+
+        root.addView(TextView(this).apply {
+            text = "Each app open = one session. After session duration → cooldown. Lower priority than curfew + daily quota."
+            textSize = 12f
+            setTextColor(Color.parseColor("#888888"))
+            setPadding(0, 0, 0, dp(8))
+        })
+
+        val sessionFields = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            visibility = if (existingSession != null) View.VISIBLE else View.GONE
+        }
+        val durationPicker = NumberPicker(this).apply { minValue = 1; maxValue = 180; value = initialSessionMin; wrapSelectorWheel = false }
+        val cooldownPicker = NumberPicker(this).apply { minValue = 1; maxValue = 1440; value = initialCooldownMin; wrapSelectorWheel = false }
+        val maxSessionsPicker = NumberPicker(this).apply { minValue = 1; maxValue = 100; value = initialMaxSessions; wrapSelectorWheel = false }
+        sessionFields.addView(buildSessionRow("Session duration:", durationPicker, "min"))
+        sessionFields.addView(buildSessionRow("Cooldown:", cooldownPicker, "min"))
+        sessionFields.addView(buildSessionRow("Max sessions/day:", maxSessionsPicker, ""))
+        root.addView(sessionFields)
+        sessionToggle.setOnCheckedChangeListener { _, checked ->
+            sessionFields.visibility = if (checked) View.VISIBLE else View.GONE
+        }
+
+        val scroll = ScrollView(this).apply { addView(root) }
 
         val builder = AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog)
             .setTitle("Set Limit for ${getAppName(pkg)}")
-            .setView(layout)
+            .setView(scroll)
             .setPositiveButton("Save") { _, _ ->
-                val newMins = picker.value
+                val newMins = dailyPicker.value
+                val session = if (sessionToggle.isChecked) {
+                    ConfigManager.SessionConfig(
+                        sessionDurationSec = durationPicker.value * 60,
+                        cooldownSec = cooldownPicker.value * 60,
+                        maxSessionsPerDay = maxSessionsPicker.value
+                    )
+                } else null
                 val newLimits = config.limits.filter { it.packageName != pkg }.toMutableList()
                 newLimits.add(ConfigManager.AppLimit(
                     packageName = pkg,
                     maxMinutesPerDay = newMins,
                     maxSecondsPerDay = newMins * 60,
-                    allowedDays = listOf(0,1,2,3,4,5,6),
-                    allowedHoursStart = 0,
-                    allowedHoursEnd = 24 * 60,
-                    allDay = true
+                    // Preserve existing day/hour restrictions if any (UI doesn't expose them yet).
+                    allowedDays = existingLimit?.allowedDays ?: listOf(0,1,2,3,4,5,6),
+                    allowedHoursStart = existingLimit?.allowedHoursStart ?: 0,
+                    allowedHoursEnd = existingLimit?.allowedHoursEnd ?: 24 * 60,
+                    allDay = existingLimit?.allDay ?: true,
+                    session = session
                 ))
                 val newConfig = ConfigManager.Config(newLimits, config.periodBlocks)
                 saveConfigWithDelay(newConfig)
@@ -771,6 +828,29 @@ class MainActivity : Activity() {
         val dialog = builder.create()
         styleDialogForDarkTheme(dialog)
         dialog.show()
+    }
+
+    private fun buildSessionRow(label: String, picker: NumberPicker, suffix: String): LinearLayout {
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(4), 0, dp(4))
+            addView(TextView(this@MainActivity).apply {
+                text = label
+                textSize = 14f
+                setTextColor(Color.WHITE)
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            })
+            addView(picker)
+            if (suffix.isNotEmpty()) {
+                addView(TextView(this@MainActivity).apply {
+                    text = " $suffix"
+                    textSize = 14f
+                    setTextColor(Color.WHITE)
+                    setPadding(dp(4), 0, 0, 0)
+                })
+            }
+        }
     }
 
     private fun saveConfigWithDelay(newConfig: ConfigManager.Config) {
@@ -1094,12 +1174,19 @@ class MainActivity : Activity() {
             val new = newLimits[pkg]
             val name = getAppName(pkg)
             when {
-                old == null && new != null ->
+                old == null && new != null -> {
                     limitChanges.add("  \u2022 [NEW] $name: ${new.maxMinutesPerDay}m/day")
+                    new.session?.let { limitChanges.add("    \u21b3 session: ${it.sessionDurationSec/60}m, cooldown ${it.cooldownSec/60}m, max ${it.maxSessionsPerDay}/day") }
+                }
                 old != null && new == null ->
                     limitChanges.add("  \u2022 [REMOVED] $name")
-                old != null && new != null && old.maxMinutesPerDay != new.maxMinutesPerDay ->
-                    limitChanges.add("  \u2022 $name: ${old.maxMinutesPerDay}m/day \u2192 ${new.maxMinutesPerDay}m/day")
+                old != null && new != null -> {
+                    if (old.maxMinutesPerDay != new.maxMinutesPerDay) {
+                        limitChanges.add("  \u2022 $name: ${old.maxMinutesPerDay}m/day \u2192 ${new.maxMinutesPerDay}m/day")
+                    }
+                    val sessionDesc = describeSessionDiff(name, old.session, new.session)
+                    if (sessionDesc != null) limitChanges.add(sessionDesc)
+                }
             }
         }
         if (limitChanges.isNotEmpty()) {
@@ -1148,6 +1235,21 @@ class MainActivity : Activity() {
         }
 
         return lines
+    }
+
+    private fun describeSessionDiff(
+        appName: String,
+        old: ConfigManager.SessionConfig?,
+        new: ConfigManager.SessionConfig?
+    ): String? {
+        fun fmt(s: ConfigManager.SessionConfig) =
+            "${s.sessionDurationSec/60}m / cooldown ${s.cooldownSec/60}m / max ${s.maxSessionsPerDay}/day"
+        return when {
+            old == null && new != null -> "  • $appName session: [NEW] ${fmt(new)}"
+            old != null && new == null -> "  • $appName session: [REMOVED]"
+            old != null && new != null && old != new -> "  • $appName session: ${fmt(old)} → ${fmt(new)}"
+            else -> null
+        }
     }
 
     private fun formatDays(days: List<Int>): String {
@@ -1209,6 +1311,7 @@ class MainActivity : Activity() {
             val progressBar = row.findViewWithTag<ProgressBar>("progress_$pkg")
             val usageText = row.findViewWithTag<TextView>("usage_$pkg")
             val statusText = row.findViewWithTag<TextView>("status_$pkg")
+            val sessionText = row.findViewWithTag<TextView>("session_$pkg")
 
             progressBar?.progress = if (maxSeconds > 0) ((usedSeconds * 100) / maxSeconds).coerceAtMost(100) else 0
             usageText?.text = "${formatTime(usedSeconds)} / ${formatTime(maxSeconds)}"
@@ -1220,7 +1323,40 @@ class MainActivity : Activity() {
             } else {
                 statusText?.visibility = View.GONE
             }
+
+            val sessionCfg = limit.session
+            if (sessionCfg != null && sessionText != null) {
+                val st = SessionManager.statusOf(this, pkg, sessionCfg, System.currentTimeMillis())
+                sessionText.text = formatSessionStatus(st)
+                sessionText.visibility = View.VISIBLE
+            } else {
+                sessionText?.visibility = View.GONE
+            }
         }
+    }
+
+    private fun formatSessionStatus(s: SessionManager.Status): String {
+        return when (s.state) {
+            SessionManager.Status.State.ACTIVE -> {
+                val m = s.sessionRemainingSec / 60
+                val sec = s.sessionRemainingSec % 60
+                "▶ session ${m}m${"%02d".format(sec)}s left · ${s.sessionsUsed}/${s.maxSessionsPerDay} today"
+            }
+            SessionManager.Status.State.COOLDOWN -> {
+                "⏸ cooldown until ${formatClockTime(s.cooldownEndsAtMs)} · ${s.sessionsUsed}/${s.maxSessionsPerDay} today"
+            }
+            SessionManager.Status.State.DAILY_EXHAUSTED -> {
+                "✗ ${s.sessionsUsed}/${s.maxSessionsPerDay} sessions · resets at 02:00"
+            }
+            SessionManager.Status.State.READY -> {
+                "○ ${s.sessionsUsed}/${s.maxSessionsPerDay} sessions today · ready"
+            }
+        }
+    }
+
+    private fun formatClockTime(epochMs: Long): String {
+        val cal = java.util.Calendar.getInstance().apply { timeInMillis = epochMs }
+        return "%02d:%02d".format(cal.get(java.util.Calendar.HOUR_OF_DAY), cal.get(java.util.Calendar.MINUTE))
     }
 
     private fun buildAppRow(pkg: String, limit: ConfigManager.AppLimit): LinearLayout {
@@ -1291,6 +1427,13 @@ class MainActivity : Activity() {
             tag = "usage_$pkg"
             textSize = 12f
             setTextColor(Color.parseColor("#AAAAAA"))
+        })
+
+        infoCol.addView(TextView(this).apply {
+            tag = "session_$pkg"
+            textSize = 11f
+            setTextColor(Color.parseColor("#80CBC4"))
+            visibility = View.GONE
         })
 
         row.addView(infoCol)

@@ -170,13 +170,16 @@ object DeviceOwnerHelper {
     }
 
     /**
-     * Sweep every installed package and lift any DO-applied suspension.
-     * Used at service startup to recover from stuck states (e.g. daily reset before
-     * the unsuspend-on-rollover bug was fixed, or service killed while apps were suspended
-     * since `suspendedApps` is in-memory only).
+     * Sweep every installed package and lift any DO-applied suspension EXCEPT those listed
+     * in [keep]. Used at service startup to recover from stuck states without blowing away
+     * suspensions that the persisted state says must remain (e.g. a quota-blocked app whose
+     * service was killed and restarted — its OS suspension is the only thing keeping the
+     * icon grayed until the next enforce tick).
+     *
+     * Pass [keep]=emptySet() for the original "clear EVERYTHING" semantics.
      * Returns the list of packages that were actually unsuspended.
      */
-    fun clearAllStuckSuspensions(ctx: Context): List<String> {
+    fun clearAllStuckSuspensions(ctx: Context, keep: Set<String> = emptySet()): List<String> {
         if (!isDeviceOwner(ctx)) return emptyList()
         val d = dpm(ctx)
         val a = admin(ctx)
@@ -188,6 +191,7 @@ object DeviceOwnerHelper {
             for (app in installed) {
                 val pkg = app.packageName
                 if (pkg == ctx.packageName) continue
+                if (pkg in keep) continue
                 runCatching {
                     if (pm.isPackageSuspended(pkg)) {
                         attempted.add(pkg)
@@ -202,7 +206,7 @@ object DeviceOwnerHelper {
             }
             if (attempted.isNotEmpty()) {
                 val ok = attempted - failed.toSet()
-                Log.w(TAG, "clearAllStuckSuspensions: ${ok.size} OK / ${failed.size} failed. OK=$ok failed=$failed")
+                Log.w(TAG, "clearAllStuckSuspensions: kept=${keep.size}, ${ok.size} OK / ${failed.size} failed. OK=$ok failed=$failed")
             }
         }.onFailure { Log.e(TAG, "clearAllStuckSuspensions failed: ${it.message}") }
         return attempted - failed.toSet()

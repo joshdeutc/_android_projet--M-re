@@ -6,7 +6,6 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.app.admin.DevicePolicyManager
-import android.app.usage.UsageStatsManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ApplicationInfo
@@ -15,7 +14,6 @@ import android.os.IBinder
 import android.os.Looper
 import android.util.Log
 import androidx.core.app.NotificationCompat
-import android.app.usage.UsageEvents
 import java.util.Calendar
 
 /**
@@ -89,6 +87,11 @@ class LimitService : Service() {
     // Usage tracking per day in seconds
     private val usageToday = mutableMapOf<String, Int>()
     private var trackingDay = -1
+    // Persisted alongside usageToday so we can detect "same logical day" on restart
+    // without relying on DAY_OF_YEAR (which collides across years).
+    private var logicalDayStartMs: Long = 0L
+    private var lastPersistMs: Long = 0L
+    private val PERSIST_THROTTLE_MS = 5_000L
 
     // Simulated "suspended" apps list representing apps blocked by HOME spam
     private val suspendedApps = mutableSetOf<String>()
@@ -136,16 +139,43 @@ class LimitService : Service() {
         if (DeviceOwnerHelper.isDeviceOwner(this)) {
             DeviceOwnerHelper.applyInitialPolicies(this)
             Log.i(TAG, "🔐 Device Owner policies applied")
-            // suspendedApps is in-memory only; on service restart, lift any leftover
-            // OS-level suspensions so apps don't stay stuck unblockable.
-            // enforceLimit() will re-suspend any app that's still over quota.
-            DeviceOwnerHelper.clearAllStuckSuspensions(this)
+        }
+
+        // Restore persisted state BEFORE clearing OS suspensions. If we have valid state
+        // from the same logical day, we want to keep apps suspended (re-applied below).
+        val currentDayStart = dayStartMillis()
+        val persisted = UsageStateStore.load(this)
+        val restoreSameDay = persisted != null && persisted.logicalDayStartMs == currentDayStart
+        if (restoreSameDay) {
+            usageToday.putAll(persisted!!.usageToday)
+            suspendedApps.addAll(persisted.suspendedApps)
+            for (pkg in persisted.suspendedApps) {
+                AppWatcherService.blockedApps.add(pkg)
+            }
+            logicalDayStartMs = persisted.logicalDayStartMs
+            Log.i(TAG, "♻️ Restored state: ${usageToday.size} tracked, ${suspendedApps.size} suspended")
+        } else {
+            if (persisted != null) {
+                Log.i(TAG, "📅 Persisted state from previous logical day — discarding")
+            }
+            logicalDayStartMs = currentDayStart
+        }
+
+        if (DeviceOwnerHelper.isDeviceOwner(this)) {
+            // Sweep stale OS-level suspensions, EXCEPT for apps the persisted state says
+            // must remain blocked. Re-apply suspendApp for those to heal any OS drift
+            // (e.g. if a manual unsuspend happened while the service was dead).
+            DeviceOwnerHelper.clearAllStuckSuspensions(this, keep = suspendedApps.toSet())
+            for (pkg in suspendedApps) {
+                DeviceOwnerHelper.suspendApp(this, pkg)
+            }
         }
 
         createNotificationChannel()
         startForeground(NOTIFICATION_ID, buildNotification("Starting..."))
         isRunning = true
         WatchdogReceiver.schedule(this)
+        DailyResetReceiver.schedule(this)
         currentlyMutedBySelfControl.clear()
         currentlyMutedBySelfControl.addAll(BlockedNotificationManager.getCurrentlyMutedBySelfControl(this))
         // Restore muted packages into the NotificationListener in-memory set
@@ -181,7 +211,13 @@ class LimitService : Service() {
                         add(Calendar.HOUR_OF_DAY, -2)
                     }.get(Calendar.DAY_OF_YEAR)
 
-                    loadTodayUsageFromSystem()
+                    // Only query UsageStatsManager on true cold start (no persisted state
+                    // for the current logical day). Restored state is more reliable than
+                    // queryAndAggregateUsageStats which has bucket-aggregation quirks.
+                    if (!restoreSameDay) {
+                        loadTodayUsageFromSystem()
+                    }
+                    persistState()
                     lastEnforceTime = System.currentTimeMillis()
                     startupComplete = true
                     Log.i(TAG, "✅ Startup complete — enforcing immediately")
@@ -216,40 +252,24 @@ class LimitService : Service() {
     }
 
     private fun syncUsageFromSystem(pkg: String) {
-        try {
-            val usm = getSystemService(Context.USAGE_STATS_SERVICE) as? UsageStatsManager ?: return
-            val stats = usm.queryAndAggregateUsageStats(dayStartMillis(), System.currentTimeMillis())
-            val usageStats = stats[pkg] ?: return
-            val systemSeconds = (usageStats.totalTimeInForeground / 1000).toInt()
-            if (systemSeconds > 0) {
-                val localSeconds = usageToday[pkg] ?: 0
-                val best = maxOf(systemSeconds, localSeconds)
-                usageToday[pkg] = best
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "⚠️ Error sync UsageStats for $pkg: ${e.message}")
+        val systemSeconds = UsageQuery.foregroundSeconds(this, pkg, dayStartMillis(), System.currentTimeMillis())
+        if (systemSeconds > 0) {
+            val localSeconds = usageToday[pkg] ?: 0
+            val best = maxOf(systemSeconds, localSeconds)
+            usageToday[pkg] = best
         }
     }
 
     private fun loadTodayUsageFromSystem() {
-        try {
-            val usm = getSystemService(Context.USAGE_STATS_SERVICE) as? UsageStatsManager ?: return
-            val stats = usm.queryAndAggregateUsageStats(dayStartMillis(), System.currentTimeMillis())
-
-            for ((pkg, limit) in limitsByPackage) {
-                val usageStats = stats[pkg] ?: continue
-                val usedSeconds = (usageStats.totalTimeInForeground / 1000).toInt()
-                if (usedSeconds > 0) {
-                    usageToday[pkg] = usedSeconds
-                    if (usedSeconds >= limit.maxSecondsPerDay) {
-                        blockApp(pkg, "quota")
-                    }
-                }
+        val seconds = UsageQuery.foregroundSecondsByPackage(this, dayStartMillis(), System.currentTimeMillis())
+        for ((pkg, limit) in limitsByPackage) {
+            val usedSeconds = seconds[pkg] ?: continue
+            usageToday[pkg] = usedSeconds
+            if (usedSeconds >= limit.maxSecondsPerDay) {
+                blockApp(pkg, "quota")
             }
-            Log.i(TAG, "📊 Initial system usage loaded")
-        } catch (e: Exception) {
-            Log.e(TAG, "⚠️ Error loading UsageStats: ${e.message}")
         }
+        Log.i(TAG, "📊 Initial system usage loaded (queryEvents)")
     }
 
     private fun enforceLimit() {
@@ -264,6 +284,7 @@ class LimitService : Service() {
         val logicalToday = calReset.get(Calendar.DAY_OF_YEAR)
         if (logicalToday != trackingDay) {
             trackingDay = logicalToday
+            logicalDayStartMs = dayStartMillis()
             usageToday.clear()
             Log.i(TAG, "📅 New day detected — resetting counters...")
 
@@ -282,11 +303,19 @@ class LimitService : Service() {
                 }
             }
 
-            loadTodayUsageFromSystem()
+            SessionManager.resetDayIfNeeded(this, logicalToday)
+            // Skip loadTodayUsageFromSystem at rollover — its UsageStatsManager query
+            // can return yesterday's data (bucket aggregation quirk) and immediately re-block
+            // apps that should be free. Restart in-memory counter from zero.
+            persistState()
         }
 
         var currentApp = AppWatcherService.currentForegroundApp
         val now = System.currentTimeMillis()
+
+        // End sessions for any pkg the user is no longer foregrounding.
+        // Done up-front so cooldown timestamp reflects the actual leave instant.
+        endSessionsForLeftPackages(currentApp, now)
         val gap = now - lastEnforceTime
         lastEnforceTime = now
 
@@ -338,19 +367,108 @@ class LimitService : Service() {
 
         val used = (usageToday[currentApp] ?: 0) + 1
         usageToday[currentApp] = used
+        persistStateThrottled()
 
         val remaining = limit.maxSecondsPerDay - used
 
         if (remaining <= 0) {
             Log.w(TAG, "🚫 BLOCK REASON: limit reached | $currentApp | used=${used}s / max=${limit.maxSecondsPerDay}s")
             blockApp(currentApp, "quota")
+            return
         }
 
-        if (remaining > 0) {
-            val remainMin = remaining / 60
-            val remainSec = remaining % 60
-            updateNotification("$currentApp : ${remainMin}m${remainSec}s remaining")
+        // Session limit (lower priority than curfew + quota): only evaluated once those pass.
+        val session = limit.session
+        if (session != null) {
+            when (SessionManager.evaluate(this, currentApp, session, now)) {
+                SessionManager.Result.BLOCKED_COOLDOWN -> {
+                    Log.w(TAG, "🚫 BLOCK REASON: session cooldown | $currentApp")
+                    blockApp(currentApp, "session_cooldown")
+                    return
+                }
+                SessionManager.Result.BLOCKED_DAILY -> {
+                    Log.w(TAG, "🚫 BLOCK REASON: session daily limit | $currentApp")
+                    blockApp(currentApp, "session_daily")
+                    return
+                }
+                SessionManager.Result.IN_SESSION,
+                SessionManager.Result.STARTED_SESSION -> { /* allow */ }
+            }
         }
+
+        val remainMin = remaining / 60
+        val remainSec = remaining % 60
+        val parts = mutableListOf("${remainMin}m${remainSec}s daily")
+        var overlayText: String? = null
+        if (session != null) {
+            val status = SessionManager.statusOf(this, currentApp, session, now)
+            if (status.state == SessionManager.Status.State.ACTIVE) {
+                val sm = status.sessionRemainingSec / 60
+                val ss = status.sessionRemainingSec % 60
+                parts.add("session ${sm}m${ss}s")
+                overlayText = "⏱ ${sm}m${"%02d".format(ss)}s · ${status.sessionsUsed}/${status.maxSessionsPerDay}"
+            }
+        }
+        updateNotification("$currentApp : ${parts.joinToString(" / ")}")
+        AppWatcherService.updateSessionOverlay(overlayText)
+    }
+
+    /**
+     * End active sessions ONLY when the user has actually returned to the home screen / launcher.
+     *
+     * A session must survive transient foreground changes that happen *inside* the app's own
+     * flow — dialogs, custom-tab/webview, share sheets, the soft keyboard, the system UI, the
+     * brief window swap while sending a message, etc. Only reaching Home means "I'm done with
+     * this app", so that's the single trigger that closes a session and starts its cooldown.
+     * (Switching directly to another app without going Home leaves the session active; the
+     * session-duration timer still expires it on its own.)
+     */
+    private fun endSessionsForLeftPackages(currentApp: String, now: Long) {
+        if (currentApp !in launcherPackages()) return
+        val active = SessionManager.activePackages(this)
+        if (active.isEmpty()) return
+        EventLog.log(this, "SESSION", "home reached ($currentApp) → ending active sessions: $active")
+        for (pkg in active) {
+            val cfg = limitsByPackage[pkg]?.session ?: continue
+            SessionManager.endSessionIfActive(this, pkg, cfg, now)
+        }
+    }
+
+    private var launcherPackagesCache: Set<String>? = null
+
+    /** Packages able to act as Home (the launcher). Cached — the default launcher rarely changes. */
+    private fun launcherPackages(): Set<String> {
+        launcherPackagesCache?.let { return it }
+        val pkgs = mutableSetOf<String>()
+        try {
+            val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
+            for (ri in packageManager.queryIntentActivities(intent, 0)) {
+                pkgs.add(ri.activityInfo.packageName)
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Launcher resolve failed: ${e.message}")
+        }
+        launcherPackagesCache = pkgs
+        Log.i(TAG, "🏠 Home/launcher packages: $pkgs")
+        return pkgs
+    }
+
+    /**
+     * Write current state (usage, suspendedApps, logical-day boundary) to disk so a
+     * service kill mid-day doesn't lose quota progress or which apps are blocked.
+     */
+    private fun persistState() {
+        lastPersistMs = System.currentTimeMillis()
+        UsageStateStore.persist(this, logicalDayStartMs, usageToday, suspendedApps)
+    }
+
+    /**
+     * Throttled variant for high-frequency calls (per-second usage tick). Block/unblock
+     * paths call persistState() directly so suspension changes are durable immediately.
+     */
+    private fun persistStateThrottled() {
+        if (System.currentTimeMillis() - lastPersistMs < PERSIST_THROTTLE_MS) return
+        persistState()
     }
 
     /**
@@ -392,6 +510,10 @@ class LimitService : Service() {
         }
         val used = usageToday[packageName] ?: 0
         if (used >= limit.maxSecondsPerDay) return true
+        val session = limit.session
+        if (session != null && SessionManager.shouldStayBlocked(this, packageName, session, System.currentTimeMillis())) {
+            return true
+        }
         return false
     }
 
@@ -464,11 +586,16 @@ class LimitService : Service() {
             DeviceOwnerHelper.unsuspendApp(this, pkg)
             ensureNotificationUnmuted(pkg)
             Log.i(TAG, "🔓 Unblocked $pkg (no longer restricted)")
+            EventLog.log(this, "UNBLOCK", "$pkg (no longer restricted)")
+            persistState()
         }
     }
 
     private fun blockApp(packageName: String, reason: String) {
         val alreadyTracked = packageName in suspendedApps
+        if (!alreadyTracked) {
+            EventLog.log(this, "BLOCK", "$packageName reason=$reason (fg=${AppWatcherService.currentForegroundApp})")
+        }
         suspendedApps.add(packageName)
         AppWatcherService.blockedApps.add(packageName)
         // OS-level suspension via Device Owner — clean, instant, no UI flash.
@@ -477,7 +604,10 @@ class LimitService : Service() {
         if (!alreadyTracked) {
             updateNotification("🚫 $packageName blocked")
             handleBlockedNotificationPolicyOnBlock(packageName, reason)
+            persistState()
         }
+        // Hide the session overlay — the user is being HOME-spammed.
+        AppWatcherService.updateSessionOverlay(null)
         // Force immediate HOME if this is the current foreground app
         // (don't wait for the next AccessibilityEvent window change)
         if (packageName == AppWatcherService.currentForegroundApp) {
@@ -639,6 +769,7 @@ class LimitService : Service() {
             val newPackages = newConfig.limits.map { it.packageName }.toSet()
             val oldPackages = limitsByPackage.keys.toSet()
 
+            var changed = false
             for (pkg in oldPackages - newPackages) {
                 limitsByPackage.remove(pkg)
                 usageToday.remove(pkg)
@@ -649,6 +780,7 @@ class LimitService : Service() {
                     ensureNotificationUnmuted(pkg)
                     Log.i(TAG, "🔓 Config reload — $pkg removed, unblocked")
                 }
+                changed = true
             }
 
             for (limit in newConfig.limits) {
@@ -657,6 +789,7 @@ class LimitService : Service() {
             config = newConfig
             periodBlockRules.clear()
             periodBlockRules.addAll(newConfig.periodBlocks)
+            if (changed) persistState()
 
             updateNotification("Config reloaded — ${newPackages.size} app(s)")
             Log.i(TAG, "🔄 Config reloaded")

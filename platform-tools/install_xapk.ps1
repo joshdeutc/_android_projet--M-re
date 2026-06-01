@@ -46,7 +46,7 @@ Write-Ok "XAPK : $XapkPath ($xapkSize MB)"
 # --- 2. Resolution du device cible -----------------------------------------
 
 $devicesRaw = & $ADB devices | Select-Object -Skip 1 | Where-Object { $_ -match "`tdevice$" }
-$serials = $devicesRaw | ForEach-Object { ($_ -split "`t")[0] }
+$serials = @($devicesRaw | ForEach-Object { ($_ -split "`t")[0] })
 
 if ($serials.Count -eq 0) {
     Write-Err2 "Aucun appareil ADB connecte. Branche le tablette/telephone et autorise USB debugging."

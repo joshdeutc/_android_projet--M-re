@@ -13,6 +13,50 @@ android {
         targetSdk 34
         versionCode 1
         versionName "1.0"
+        // Privacy: the persistent on-device event log (records foreground-app history) is OFF by
+        // default and only enabled for the `me` developer flavor below. Other flavors ship without
+        // any foreground-activity logging.
+        buildConfigField "boolean", "EVENT_LOG_ENABLED", "false"
+    }
+
+    buildFeatures {
+        buildConfig true
+    }
+
+    flavorDimensions += "level"
+    productFlavors {
+        basic {
+            dimension "level"
+            buildConfigField "int", "LEVEL", "0"
+            buildConfigField "String", "LEVEL_NAME", "\"basic\""
+        }
+        admin {
+            dimension "level"
+            buildConfigField "int", "LEVEL", "1"
+            buildConfigField "String", "LEVEL_NAME", "\"admin\""
+        }
+        deviceAdmin {
+            dimension "level"
+            buildConfigField "int", "LEVEL", "2"
+            buildConfigField "String", "LEVEL_NAME", "\"deviceAdmin\""
+        }
+        me {
+            dimension "level"
+            buildConfigField "int", "LEVEL", "3"
+            buildConfigField "String", "LEVEL_NAME", "\"me\""
+            // Developer/debug flavor only: enable the persistent event log for diagnostics.
+            buildConfigField "boolean", "EVENT_LOG_ENABLED", "true"
+        }
+    }
+
+    // Blocking engine (a11y, LimitService, SessionManager, ...) lives in src/main/ and
+    // is shared by all 4 flavors. Each flavor adds only its anti-bypass differentiator:
+    //   basic       → nothing extra (uninstallable normally)
+    //   admin       → + AdminReceiver as legacy DeviceAdminReceiver (must deactivate first)
+    //   deviceAdmin → + DPM Device Owner + CommandReceiver + Knox perms (factory-reset to remove)
+    //   me          → reuses deviceAdmin's manifest; future root hooks in src/me/java/
+    sourceSets {
+        me.manifest.srcFile 'src/deviceAdmin/AndroidManifest.xml'
     }
 
     buildTypes {

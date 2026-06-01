@@ -1,0 +1,38 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Fond (Squircle avec dégradé sombre) -->
+  <rect width="512" height="512" rx="115" fill="#121215"/>
+  <rect width="512" height="512" rx="115" fill="url(#bg_gradient)" opacity="0.9"/>
+  
+  <!-- Bouclier Externe (Symbole de protection stricte / Device Owner) -->
+  <path d="M256 70.4L115.2 134.4V251.733C115.2 362.453 175.573 464.747 256 516.267C336.427 464.747 396.8 362.453 396.8 251.733V134.4L256 70.4Z" 
+        stroke="url(#shield_gradient)" stroke-width="28" stroke-linejoin="round" fill="#1A1A24" shadow="drop-shadow(0px 8px 16px rgba(0,0,0,0.5))"/>
+
+  <!-- Sablier interne stylisé (Symbole du temps / de la limite) -->
+  <path d="M211.2 179.2C211.2 161.527 225.527 147.2 243.2 147.2H268.8C286.473 147.2 300.8 161.527 300.8 179.2V211.2L262.4 251.733L300.8 292.267V324.267C300.8 341.94 286.473 356.267 268.8 356.267H243.2C225.527 356.267 211.2 341.94 211.2 324.267V292.267L249.6 251.733L211.2 211.2V179.2Z" 
+        fill="url(#hourglass_gradient)"/>
+
+  <!-- Détail temporel (Sablier en train de couler) -->
+  <circle cx="256" cy="275.2" r="8" fill="#E94560"/>
+  <circle cx="256" cy="307.2" r="16" fill="#E94560"/>
+
+  <!-- Définition des dégradés -->
+  <defs>
+    <!-- Dégradé du fond : Nuit profonde -->
+    <linearGradient id="bg_gradient" x1="0" y1="0" x2="512" y2="512" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#1A1A2E"/>
+      <stop offset="1" stop-color="#16213E"/>
+    </linearGradient>
+    
+    <!-- Dégradé du bouclier : Cyan digital -->
+    <linearGradient id="shield_gradient" x1="115" y1="70" x2="396" y2="516" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#00D2FF"/>
+      <stop offset="1" stop-color="#3A7BD5"/>
+    </linearGradient>
+
+    <!-- Dégradé du sablier : Rouge Neon / Contrainte -->
+    <linearGradient id="hourglass_gradient" x1="211" y1="147" x2="300" y2="356" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#E94560"/>
+      <stop offset="1" stop-color="#900C3F"/>
+    </linearGradient>
+  </defs>
+</svg>

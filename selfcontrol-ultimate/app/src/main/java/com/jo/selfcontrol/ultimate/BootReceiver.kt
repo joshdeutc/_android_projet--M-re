@@ -13,8 +13,9 @@ import android.util.Log
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         val action = intent.action ?: return
-        Log.i("SelfControl.Boot", "$action received -> starting LimitService + watchdog")
+        Log.i("SelfControl.Boot", "$action received -> starting LimitService + watchdog + daily reset")
         LimitService.start(context)
         WatchdogReceiver.schedule(context)
+        DailyResetReceiver.schedule(context)
     }
 }

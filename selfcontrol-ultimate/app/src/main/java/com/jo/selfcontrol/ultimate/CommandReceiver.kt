@@ -34,7 +34,21 @@ class CommandReceiver : BroadcastReceiver() {
             "com.jo.selfcontrol.ultimate.ALLOW_INSTALL" -> handleAllowInstall(context)
             "com.jo.selfcontrol.ultimate.BLOCK_INSTALL" -> handleBlockInstall(context)
             "com.jo.selfcontrol.ultimate.UNSUSPEND_ALL" -> handleUnsuspendAll(context)
+            "com.jo.selfcontrol.ultimate.EXPORT_LOG" -> handleExportLog(context)
+            "com.jo.selfcontrol.ultimate.CLEAR_LOG" -> handleClearLog(context)
         }
+    }
+
+    private fun handleExportLog(context: Context) {
+        val path = EventLog.exportToExternal(context)
+        Log.w("SelfControl.Cmd", "=== EXPORT_LOG → $path ===")
+        EventLog.log(context, "CMD", "EXPORT_LOG → $path")
+    }
+
+    private fun handleClearLog(context: Context) {
+        Log.w("SelfControl.Cmd", "=== CLEAR_LOG ===")
+        EventLog.clear(context)
+        EventLog.log(context, "CMD", "log cleared")
     }
 
     private fun handleUnsuspendAll(context: Context) {

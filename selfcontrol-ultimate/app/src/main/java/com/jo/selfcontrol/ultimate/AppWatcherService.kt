@@ -1,9 +1,20 @@
 package com.jo.selfcontrol.ultimate
 
 import android.accessibilityservice.AccessibilityService
+import android.content.Context
+import android.graphics.Color
+import android.graphics.PixelFormat
+import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
+import android.util.TypedValue
+import android.view.Gravity
+import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import android.widget.TextView
 import java.io.File
 
 /**
@@ -79,10 +90,23 @@ class AppWatcherService : AccessibilityService() {
                 inst.goHome("Forced: $pkg blocked")
             }
         }
+
+        /**
+         * Show/hide the floating session countdown over the current foreground app.
+         * Called by LimitService.enforceLimit every second with the up-to-date text,
+         * or null to hide. Uses TYPE_ACCESSIBILITY_OVERLAY so no SYSTEM_ALERT_WINDOW
+         * permission is needed.
+         */
+        fun updateSessionOverlay(text: String?) {
+            instance?.applySessionOverlay(text)
+        }
     }
 
     private var appLabel: String = "SelfControl"
     private var lastHomeActionTime = 0L
+
+    private var overlayView: TextView? = null
+    private val overlayHandler = Handler(Looper.getMainLooper())
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -141,6 +165,7 @@ class AppWatcherService : AccessibilityService() {
         if (now - lastHomeActionTime < HOME_COOLDOWN_MS) return false
         lastHomeActionTime = now
         Log.w(TAG, "🛡️ Protection activated: $reason — returning home")
+        EventLog.log(this, "HOME", "forced home: $reason (fg=$currentForegroundApp)")
         performGlobalAction(GLOBAL_ACTION_BACK)
         performGlobalAction(GLOBAL_ACTION_HOME)
         return true
@@ -164,6 +189,10 @@ class AppWatcherService : AccessibilityService() {
             val previousApp = currentForegroundApp
             currentForegroundApp = packageName
             Log.d(TAG, "🔄 $previousApp → $packageName")
+            EventLog.log(this, "FG", "$previousApp → $packageName (class=$className)")
+            // Hide the session overlay on app switch; LimitService re-shows within 1s
+            // if the new foreground app has an active session.
+            applySessionOverlay(null)
         }
 
         if (packageName in blockedApps) {
@@ -326,7 +355,73 @@ class AppWatcherService : AccessibilityService() {
     override fun onDestroy() {
         super.onDestroy()
         instance = null
+        applySessionOverlay(null)
         Log.w(TAG, "💀 AccessibilityService destroyed")
         currentForegroundApp = "unknown"
+    }
+
+    // ──────────────────────────────────────
+    //  Session overlay
+    // ──────────────────────────────────────
+
+    private fun applySessionOverlay(text: String?) {
+        overlayHandler.post {
+            try {
+                if (text == null) {
+                    removeOverlayView()
+                } else {
+                    ensureOverlayView()
+                    overlayView?.text = text
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "session overlay update failed: ${e.message}")
+            }
+        }
+    }
+
+    private fun ensureOverlayView() {
+        if (overlayView != null) return
+        val density = resources.displayMetrics.density
+        fun dp(v: Int) = (v * density).toInt()
+        val bg = GradientDrawable().apply {
+            setColor(Color.parseColor("#CC000000"))
+            cornerRadius = dp(18).toFloat()
+        }
+        val tv = TextView(this).apply {
+            background = bg
+            setTextColor(Color.parseColor("#80CBC4"))
+            setPadding(dp(16), dp(8), dp(16), dp(8))
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+            typeface = Typeface.DEFAULT_BOLD
+            text = ""
+        }
+        val params = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+                or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
+            y = dp(40)  // below the status bar
+        }
+        val wm = getSystemService(Context.WINDOW_SERVICE) as WindowManager
+        try {
+            wm.addView(tv, params)
+            overlayView = tv
+        } catch (e: Exception) {
+            Log.e(TAG, "session overlay addView failed: ${e.message}")
+        }
+    }
+
+    private fun removeOverlayView() {
+        val v = overlayView ?: return
+        overlayView = null
+        try {
+            val wm = getSystemService(Context.WINDOW_SERVICE) as WindowManager
+            wm.removeView(v)
+        } catch (_: Exception) {}
     }
 }

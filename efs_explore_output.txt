@@ -1,0 +1,287 @@
+﻿============================================
+=== 1. /mnt/vendor/efs/ (récent) ===
+============================================
+/mnt/vendor/efs:
+total 2196
+drwxrwx--x 13 radio  system       4096 2025-07-22 04:14 .
+drwxr-xr-x  5 root   root          100 2026-05-20 12:33 ..
+-rwx------  1 radio  radio     1048576 2025-07-22 04:14 .nv_data.bak
+-rwx------  1 radio  radio          32 2025-07-22 04:14 .nv_data.bak.md5
+-rw-------  1 radio  radio           1 2022-03-14 09:11 .nv_state
+drwxrwxr-x  2 system system       4096 2022-03-02 08:13 DAK
+drwxrwx---  2 system system       4096 2022-11-28 09:45 HDM
+drwxrwx---  2 system bluetooth    4096 2022-03-02 08:12 bluetooth
+drwx------  2 system system       4096 2022-03-14 14:46 camera
+-rw-------  1 radio  radio          96 2026-05-20 12:34 factory.prop
+drwx------  2 root   root        16384 2008-12-31 16:00 lost+found
+-rwx------  1 radio  radio           3 2026-05-20 12:34 mps_code.dat
+-rw-------  1 radio  radio        8988 2025-11-25 18:10 nv.log
+-rw-------  1 radio  radio     1048576 2026-05-20 13:04 nv_data.bin
+-rw-------  1 radio  radio          32 2026-05-20 13:04 nv_data.bin.md5
+drwxrwx---  2 system system       4096 2022-02-23 15:51 prov
+drwxrwx---  3 system system       4096 2021-01-01 13:00 prov_data
+drwx------  2 radio  radio        4096 2022-02-23 15:52 root
+drwxrwx---  2 system system       4096 2021-01-01 13:00 taas
+drwx------  3 system system       4096 2021-01-01 13:00 tee
+-rwx------  1 radio  radio          63 2024-02-18 20:53 telephony.prop
+drwxr-xr-x  2 wifi   wifi         4096 2022-03-02 08:12 wifi
+-rw-r--r--  1 system system        168 2022-03-02 08:13 wv.keys
+
+/mnt/vendor/efs/DAK:
+total 72
+drwxrwxr-x  2 system system 4096 2022-03-02 08:13 .
+drwxrwx--x 13 radio  system 4096 2025-07-22 04:14 ..
+-rw-r-----  1 system system  305 2022-03-02 08:13 GAK_EC.private
+-rw-r-----  1 system system  102 2022-03-02 08:13 GAK_EC.private.val
+-rw-r-----  1 system system 1956 2022-03-02 08:13 GAK_RSA.private
+-rw-r-----  1 system system  416 2022-03-02 08:13 GAK_RSA.private.val
+-rw-r-----  1 system system  353 2022-03-02 08:13 SAK_EC.private
+-rw-r-----  1 system system  136 2022-03-02 08:13 SAK_EC.private.val
+-rw-r-----  1 system system  503 2022-03-02 08:13 gakeccert0.der
+-rw-r-----  1 system system  920 2022-03-02 08:13 gakeccert1.der
+-rw-r-----  1 system system 1312 2022-03-02 08:13 gakeccert2.der
+-rw-r-----  1 system system 1252 2022-03-02 08:13 gakrsacert0.der
+-rw-r-----  1 system system 1350 2022-03-02 08:13 gakrsacert1.der
+-rw-r-----  1 system system 1312 2022-03-02 08:13 gakrsacert2.der
+-rw-r-----  1 system system  988 2022-03-02 08:13 sakeccert0.der
+-rw-r-----  1 system system  659 2022-03-02 08:13 sakeccert1.der
+
+/mnt/vendor/efs/HDM:
+total 16
+drwxrwx---  2 system system 4096 2022-11-28 09:45 .
+drwxrwx--x 13 radio  system 4096 2025-07-22 04:14 ..
+
+/mnt/vendor/efs/bluetooth:
+total 20
+drwxrwx---  2 system bluetooth 4096 2022-03-02 08:12 .
+drwxrwx--x 13 radio  system    4096 2025-07-22 04:14 ..
+-rw-rw----  1 system bluetooth   17 2022-03-02 08:12 bt_addr
+
+/mnt/vendor/efs/camera:
+total 20
+drwx------  2 system system 4096 2022-03-14 14:46 .
+drwxrwx--x 13 radio  system 4096 2025-07-22 04:14 ..
+-rw-r--r--  1 system system  760 2022-03-14 14:46 camera_tilt_calibration_info_1_4
+
+/mnt/vendor/efs/lost+found:
+total 28
+drwx------  2 root  root   16384 2008-12-31 16:00 .
+drwxrwx--x 13 radio system  4096 2025-07-22 04:14 ..
+
+/mnt/vendor/efs/prov:
+total 24
+drwxrwx---  2 system system 4096 2022-02-23 15:51 .
+drwxrwx--x 13 radio  system 4096 2025-07-22 04:14 ..
+-rw-r-----  1 system system 2127 2023-08-07 23:30 diag.dat
+-rw-r-----  1 system system  359 2022-06-24 18:56 issued.log
+
+/mnt/vendor/efs/prov_data:
+total 24
+drwxrwx---  3 system system 4096 2021-01-01 13:00 .
+drwxrwx--x 13 radio  system 4096 2025-07-22 04:14 ..
+drwxrwx---  2 system system 4096 2022-03-02 08:13 dev_root
+
+
+============================================
+=== 2. /efs/ (legacy) detail ===
+============================================
+
+--- /efs/sec_efs ---
+total 180
+-rw-------  1 system     system       762 2026-05-20 12:36 !SVC
+drwxrwxr-x  8 radio      system      4096 2026-05-20 12:36 .
+drwxrwx--x 24 system     radio       4096 2025-05-12 18:32 ..
+-rwx------  1 root       radio          0 2021-01-01 13:00 .ffw
+drwxrwx---  4 system     system      4096 2023-11-07 12:27 PRH
+-rw-------  1 system     system       762 2026-05-20 12:36 SVC
+-rw-------  1 system     system     14686 2025-11-25 18:11 SettingsBackup.json
+drwxrwx--x  2 system     system      4096 2022-02-23 15:51 auto_reboot
+-rw-------  1 system     system        13 2025-07-12 15:21 cos_binary
+-rw-------  1 system     system       284 2025-07-12 15:21 cos_result
+-rw-------  1 system     system        17 2026-05-20 12:34 cos_retry
+-rw-------  1 system     system         2 2025-06-15 12:08 esesm_result
+-rw-------  1 system     system         2 2026-05-05 14:05 frNotiResult
+-rw-r--r--  1 system     system         1 2025-07-22 00:15 fraResult
+drwxrwx---  2 vendor_ker vendor_ker  4096 2025-06-16 10:16 ker
+drwxrwx---  2 everybody  everybody   4096 2021-01-01 13:00 kpm
+-rw-------  1 system     system         4 2025-07-12 15:21 sem_cosv
+-rw-------  1 system     system        42 2022-03-11 10:07 sem_data
+-rw-------  1 system     system      2663 2022-02-23 15:51 sem_sk.dat
+-rw-rw----  1 radio      radio      20480 2026-05-18 19:26 sim_profile.db
+-rw-------  1 radio      radio          0 2024-10-24 23:44 sim_profile.db-journal
+-rw-rw----  1 radio      radio      32768 2026-05-18 19:26 sim_profile.db-shm
+-rw-rw----  1 radio      radio          0 2026-05-18 19:26 sim_profile.db-wal
+drwxrwxr-x  2 system     system      4096 2022-04-09 17:45 skpm
+-rw-------  1 system     system       104 2022-02-23 15:51 ssp_data
+drwx------  2 system     system      4096 2021-01-01 13:01 ucm_ca_cert
+
+--- /efs/imei ---
+total 44
+drwxrwxr-x  2 root   radio  4096 2022-04-10 09:56 .
+drwxrwx--x 24 system radio  4096 2025-05-12 18:32 ..
+-rw-r--r--  1 system system    3 2022-03-02 08:12 cid.dat
+-rw-------  1 root   root     96 2026-05-20 12:33 factory.prop
+-rwxrwxr-x  1 radio  system    3 2025-11-25 18:10 mps_code.dat
+-rw-rw-r--  1 radio  root      3 2022-04-09 17:54 omcnw_code.dat
+-rw-rw-r--  1 radio  root      3 2022-04-09 17:54 omcnw_code2.dat
+-rwxrwxr-x  1 system radio    14 2022-03-02 08:12 prodcode.dat
+-rw-rw-r--  1 radio  radio     4 2022-04-12 18:46 total_call_time
+
+--- /efs/recovery ---
+total 32
+drwxrwx--x  2 radio  system 4096 2025-11-25 18:09 .
+drwxrwx--x 24 system radio  4096 2025-05-12 18:32 ..
+-rw-------  1 root   root   1490 2025-11-25 18:09 extra_history
+-rw-------  1 root   root   8499 2025-11-25 18:09 history
+
+--- /efs/pdp_bkup ---
+total 28
+drwxr-----  2 system system 4096 2026-05-09 16:40 .
+drwxrwx--x 24 system radio  4096 2025-05-12 18:32 ..
+-rw-r-----  1 root   root   9168 2026-05-20 12:34 pdp_pers.log
+
+--- /efs/FactoryApp ---
+total 200
+drwxrwxr-x  3 system system 4096 2025-08-24 15:46 .
+drwxrwx--x 24 system radio  4096 2025-05-12 18:32 ..
+-rw-rw----  1 system system   28 2022-03-14 08:47 HwParamBattQR
+-rw-------  1 system system 6255 2022-03-02 08:13 HwParamData
+-rw-------  1 system system  822 2022-03-02 08:12 HwPartInform
+-rw-------  1 system system    8 2022-03-02 08:12 HwPartSMDDate
+drwx------  2 system system 4096 2023-11-07 12:28 Sensorinfo
+-rw-rw----  1 system log       3 2022-03-02 08:13 asoc
+-rwxr--r--  1 system system    1 2022-03-02 08:12 baro_delta
+-rw-r-----  1 system system    3 2026-05-18 14:20 batt_after_manufactured
+-rw-rw----  1 system system    8 2023-11-07 12:30 batt_beginning_date
+-rw-------  1 system system    5 2026-05-20 10:04 batt_cable_count
+-rw-rw----  1 system log       5 2026-05-20 00:03 batt_discharge_level
+-rw-------  1 system system  102 2026-05-20 12:34 batt_temp_charge
+-rw-rw-r--  1 system system    2 2026-05-19 11:27 bsoh
+-rw-r--r--  1 system system    2 2026-05-19 11:27 bsoh0
+-rw-------  1 system system   97 2024-10-22 10:27 bsoh_data
+-rw-------  1 system system 1414 2025-08-24 15:46 burn_reason
+-rw-------  1 system system    1 2022-03-02 08:12 cable_detect_count_octa
+-rw-r--r--  1 system system   20 2022-03-11 10:08 camera_ois_gyro_cal
+-rw-r--r--  1 system system  760 2022-03-14 14:46 camera_tilt_calibration_info_1_4
+-rw-rw----  1 system system   18 2026-05-20 00:39 cisd_cable_data
+-rw-rw----  1 system system  241 2026-05-20 12:45 cisd_data
+-rw-rw----  1 system system   14 2026-05-14 14:49 cisd_event_data
+-rw-rw----  1 system system    2 2021-01-01 13:00 cisd_pd_data
+-rw-rw----  1 system system    7 2026-05-19 22:36 cisd_power_data
+-rw-rw----  1 system system   10 2021-01-01 13:00 cisd_tx_data
+-rw-rw----  1 system system    2 2021-01-01 13:00 cisd_wc_data
+-rwxr--r--  1 system system   13 2022-03-02 08:12 control_no
+
+--- /efs/Battery ---
+total 52
+drwxrwxr-x  3 radio  system 4096 2024-10-19 20:42 .
+drwxrwx--x 24 system radio  4096 2025-05-12 18:32 ..
+-rw-rw----  1 system system    5 2026-05-18 01:16 batt_capacity_max
+-rw-rw----  1 system system    3 2026-05-20 12:34 batt_full_capacity
+-rw-------  1 system system    5 2026-05-20 12:34 batt_ltc_highsoc_duration
+-rw-------  1 system system    2 2026-05-20 12:34 batt_ltc_highsoc_threshold
+-rw-------  1 system system    2 2026-05-20 12:34 batt_ltc_release_threshold
+-rw-rw-r--  1 radio  system    3 2026-05-13 09:13 batt_repcap_1st
+-rw-rw----  1 system system    1 2026-05-20 12:34 batt_soc_rechg
+drwxrwxr-x  2 radio  system 4096 2024-10-19 20:41 qi_digests
+
+--- /efs/lpm ---
+total 16
+drwxrwxr-x  2 system system 4096 2026-05-13 09:37 .
+drwxrwx--x 24 system radio  4096 2025-05-12 18:32 ..
+
+--- /efs/biometrics ---
+total 24
+drwxrwx---  3 system system 4096 2021-01-01 13:00 .
+drwxrwx--x 24 system radio  4096 2025-05-12 18:32 ..
+drwxrwx---  2 system system 4096 2022-03-14 14:41 meta
+
+--- /efs/carrier ---
+total 16
+drwxr-xr-x  2 radio  system 4096 2021-01-01 13:00 .
+drwxrwx--x 24 system radio  4096 2025-05-12 18:32 ..
+
+============================================
+=== 3. État modem .nv_state ===
+============================================
+00000000: 31                                       1
+
+============================================
+=== 4. factory.prop & telephony.prop ===
+============================================
+--- /mnt/vendor/efs/factory.prop ---
+ro.multisim.simslotcount=2
+ro.vendor.multisim.simslotcount=2
+persist.radio.multisim.config=dsds
+
+--- /mnt/vendor/efs/telephony.prop ---
+ro.multisim.default_network=26
+persist.radio.def_network=26,26
+
+--- /mnt/vendor/efs/mps_code.dat ---
+00000000: 424f 47                                  BOG
+
+============================================
+=== 5. nv.log tail (logs internes NV) ===
+============================================
+[FINAL]22/03/14 13:40:26:current MD5 off
+[FINAL]22/03/14 13:40:52:NvCore done
+[FINAL]22/03/14 13:40:52:NvBackup
+[FINAL]22/03/14 13:40:52:MD5 on
+[WIFI]22/03/14 13:40:55:MD5 off
+[WIFI]22/03/14 13:41:11:NvCore done
+[WIFI]22/03/14 13:41:11:NvBackup
+[WIFI]22/03/14 13:41:11:MD5 on
+[IMEI]22/03/02 12:42:57:NvCore done
+[IMEI]22/03/02 12:42:57:NvBackup
+[IMEI]22/03/02 12:42:57:NvCore done
+[IMEI]22/03/02 12:42:57:NvBackup
+[IMEI]22/03/02 12:42:58:NvCore done
+[IMEI]22/03/02 12:42:58:NvBackup
+[IMEI]22/03/02 12:42:59:NvCore done
+[IMEI]22/03/02 12:42:59:NvBackup
+[IMEI]22/03/02 12:42:59:NvCore done
+[IMEI]22/03/02 12:43:00:NvBackup
+[IMEI]22/03/02 12:43:19:NvCore done
+[IMEI]22/03/02 12:43:19:NvBackup
+[none]21/01/01 12:00:52:NvCore done
+[none]21/01/01 12:00:52:NvBackup
+[none]22/02/23 20:21:24:NvCore done
+[none]22/02/23 20:21:24:NvBackup
+[IMEI]22/01/01 00:00:00:NvCore done
+[IMEI]22/01/01 00:00:00:NvBackup
+[none]22/02/23 15:50:54:NvCore done
+[none]22/02/23 15:50:54:NvBackup
+[none]22/04/09 17:53:50:NvCore done
+[none]22/04/09 17:53:50:NvBackup
+[none]22/04/10 09:56:18:NvCore done
+[none]22/04/10 09:56:18:NvBackup
+[none]22/09/06 19:18:29:Process RFS_UNLINK_FILE request.
+[none]23/01/30 18:08:50:Process RFS_UNLINK_FILE request.
+[none]23/05/18 14:39:54:Process RFS_UNLINK_FILE request.
+[none]23/11/11 09:36:55:Process RFS_UNLINK_FILE request.
+[none]24/06/21 14:09:54:Process RFS_UNLINK_FILE request.
+[none]24/11/19 16:58:21:Process RFS_UNLINK_FILE request.
+[none]25/04/16 09:58:09:Process RFS_UNLINK_FILE request.
+[none]25/07/12 13:33:16:NvCore done
+[none]25/07/12 13:33:16:NvBackup
+[none]25/07/19 23:27:54:NvCore done
+[none]25/07/19 23:27:54:NvBackup
+[none]25/07/21 22:13:20:NvCore done
+[none]25/07/21 22:13:20:NvBackup
+[none]25/07/22 02:14:47:NvCore done
+[none]25/07/22 02:14:47:NvBackup
+[none]25/07/22 02:28:10:Not exist secure efs, NvBackup stopped
+[none]25/11/24 16:36:57:Not exist secure efs, NvBackup stopped
+[none]25/11/25 17:10:31:Not exist secure efs, NvBackup stopped
+
+============================================
+=== 6. lpm_boot.log ===
+============================================
+                                                                                                                                                                                                                                                                
+============================================
+=== 7. Tailles totales / candidats backup ===
+============================================
+Find tous les .bak, .backup, _bak dans /efs et /mnt/vendor/efs :
+/mnt/vendor/efs/.nv_data.bak
+/mnt/vendor/efs/.nv_data.bak.md5

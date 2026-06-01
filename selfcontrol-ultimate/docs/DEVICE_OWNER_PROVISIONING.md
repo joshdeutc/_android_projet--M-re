@@ -191,7 +191,24 @@ adb -s $SERIAL shell "am start -n $PKG/.MainActivity"
 adb -s $SERIAL shell "dumpsys device_policy 2>/dev/null | grep -A3 'Device Owner'"
 ```
 
+## Variante : boot reflashé qui bloque `cp`/`chown` vers /data/system (2026-05-22)
+
+Sur un boot image reflashé via Odin, l'étape 3 (`cp` + `chown system:system`) peut échouer même en root :
+- `cp ... /data/system/...` → **Permission denied** (SELinux : le contexte `magisk` n'a pas le droit d'écrire `system_data_file`).
+- `chown system:system` → **Operation not permitted** (le kernel Samsung **bloque le chown VERS l'UID system**, même avec CAP_CHOWN plein).
+- ⚠️ **NE PAS utiliser `setenforce 0`** comme contournement : sur ce kernel, ça déclenche **Defex** qui neutralise les capabilities de root (chown/chmod/setenforce suivants échouent, et `setenforce 1` est refusé → SELinux reste permissif jusqu'au reboot).
+
+**Contournement qui marche** (utilisé le 2026-05-22 sur l'A53) — exploiter le fait que `/data/system/device_owner_2.xml` **existe déjà** (Android y stocke un marqueur `policy-engine-migration`) avec le bon owner/contexte/perms, et **écrire le contenu EN PLACE** (pas de `cp`/`chown`) :
+```sh
+# 1. Autoriser le contexte magisk a ecrire system_data_file (SANS setenforce)
+#    via un script pousse (eviter le glob du * par le shell PC) :
+magiskpolicy --live 'allow magisk system_data_file file *'
+# 2. Ecrire le contenu dans le fichier EXISTANT (preserve owner system:system / contexte / perms 600)
+cat /data/local/tmp/do.abx > /data/system/device_owner_2.xml
+```
+Vérifier ensuite : `ls -lZ` (toujours `system:system u:object_r:system_data_file:s0`), `xxd | head -1` (magic `4142 5800`), puis reboot. La règle magiskpolicy est non-persistante (perdue au reboot) mais ça n'a pas d'importance, l'injection est faite.
+
 ## Cas confirmés
 
-- ✅ Samsung Galaxy A53 (SM_A536B) — OneUI 7 / Android 15 — méthode testée le 2026-05-01
+- ✅ Samsung Galaxy A53 (SM_A536B) — OneUI 7 / Android 15 — méthode testée le 2026-05-01 ; **variante "écriture en place + magiskpolicy" confirmée le 2026-05-22** (flavor `me`, boot reflashé Odin)
 - ⚠️ Samsung Galaxy Tab S7+ (SM_T970) — Android 13 / OneUI 5 — pas besoin de cette méthode, le `dpm set-device-owner` direct fonctionne avec testOnly
