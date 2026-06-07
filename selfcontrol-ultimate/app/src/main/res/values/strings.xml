@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">SelfControl Free</string>
+    <string name="app_name">Custos</string>
     <string name="accessibility_description">Monitors the foreground app to enforce screen time limits and prevent uninstallation.</string>
-    <string name="notification_channel_name">Self Control Monitor</string>
+    <string name="notification_channel_name">Custos Monitor</string>
     <string name="notification_channel_desc">Monitoring service notifications</string>
 </resources>
