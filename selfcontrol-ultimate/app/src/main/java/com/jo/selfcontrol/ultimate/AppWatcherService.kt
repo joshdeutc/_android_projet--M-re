@@ -45,7 +45,10 @@ class AppWatcherService : AccessibilityService() {
         )
 
         // App names to protect
-        private val TARGET_APP_NAMES = mutableSetOf("SelfControl", "selfcontrol", "Self control", "Self Control")
+        // Visible app-label variants used to detect our own App-info / Settings page.
+        // MUST include the current launcher label ("Custos") or the anti-uninstall /
+        // force-stop protection silently stops triggering after a rename.
+        private val TARGET_APP_NAMES = mutableSetOf("Custos", "custos", "SelfControl", "selfcontrol", "Self control", "Self Control")
 
         // Cancel buttons to click
         private val CANCEL_KEYWORDS = setOf("Cancel", "No", "Annuler", "Non")

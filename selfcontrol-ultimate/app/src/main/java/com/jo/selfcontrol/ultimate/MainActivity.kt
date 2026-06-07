@@ -90,19 +90,20 @@ class MainActivity : Activity() {
             setPadding(dp(16), dp(16), dp(16), dp(32))
         }
 
-        // Header with title + help button
-        val headerRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
+        // Header: title centered on the full width, help button pinned to the right
+        val headerRow = FrameLayout(this).apply {
             setPadding(0, dp(8), 0, dp(4))
         }
         headerRow.addView(TextView(this).apply {
-            text = "SelfControl Free"
+            text = "Custos"
             textSize = 26f
             setTextColor(Color.WHITE)
             typeface = Typeface.DEFAULT_BOLD
             gravity = Gravity.CENTER
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            layoutParams = FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { gravity = Gravity.CENTER }
         })
         headerRow.addView(Button(this).apply {
             text = "❓"
@@ -111,10 +112,10 @@ class MainActivity : Activity() {
             background = roundedBackground(Color.parseColor("#2A2A2A"))
             setPadding(dp(12), dp(6), dp(12), dp(6))
             setOnClickListener { showFullWalkthroughDialog() }
-            layoutParams = LinearLayout.LayoutParams(
+            layoutParams = FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
-            )
+            ).apply { gravity = Gravity.END or Gravity.CENTER_VERTICAL }
         })
         mainLayout.addView(headerRow)
 
@@ -1293,7 +1294,14 @@ class MainActivity : Activity() {
             return
         }
 
-        if (dashboardContainer.childCount != limits.size) {
+        // Rebuild the rows whenever the set of monitored packages changes. Comparing by
+        // childCount alone was buggy: an empty list leaves a "No limits configured."
+        // placeholder (childCount == 1), so adding the FIRST app (limits.size == 1) matched
+        // and the rebuild was skipped — the app only appeared once a second was added.
+        val currentTags = (0 until dashboardContainer.childCount).mapNotNull {
+            (dashboardContainer.getChildAt(it) as? LinearLayout)?.tag as? String
+        }.toSet()
+        if (currentTags != limits.keys) {
             dashboardContainer.removeAllViews()
             for ((pkg, limit) in limits) {
                 dashboardContainer.addView(buildAppRow(pkg, limit))
@@ -2255,9 +2263,20 @@ class MainActivity : Activity() {
 
     private data class AppInfo(
         val packageName: String,
-        val label: String,
-        val icon: Drawable
+        val label: String
     )
+
+    /**
+     * Lazily-loaded, cached app icons. Decoding every installed app's icon up front on the
+     * UI thread was the main cause of the slow app picker (much worse on Samsung, which ships
+     * far more preinstalled apps than a Pixel). Icons are now resolved only for the rows the
+     * ListView actually renders, and cached so scrolling stays smooth.
+     */
+    private val iconCache = HashMap<String, Drawable>()
+    private fun appIcon(pkg: String): Drawable = iconCache.getOrPut(pkg) {
+        try { packageManager.getApplicationIcon(pkg) }
+        catch (_: Exception) { getDrawable(android.R.drawable.sym_def_app_icon)!! }
+    }
 
     private fun getInstalledLaunchableApps(): List<AppInfo> {
         val pm = packageManager
@@ -2271,9 +2290,7 @@ class MainActivity : Activity() {
             .map { app ->
                 AppInfo(
                     packageName = app.packageName,
-                    label = pm.getApplicationLabel(app).toString(),
-                    icon = try { pm.getApplicationIcon(app) }
-                           catch (_: Exception) { getDrawable(android.R.drawable.sym_def_app_icon)!! }
+                    label = pm.getApplicationLabel(app).toString()
                 )
             }
             .sortedBy { it.label.lowercase() }
@@ -2321,7 +2338,7 @@ class MainActivity : Activity() {
                     layoutParams = LinearLayout.LayoutParams(sz, sz).apply {
                         marginEnd = dp(12)
                     }
-                    setImageDrawable(app.icon)
+                    setImageDrawable(appIcon(app.packageName))
                 }
 
                 val label = TextView(this@MainActivity).apply {
@@ -2401,7 +2418,7 @@ class MainActivity : Activity() {
                     layoutParams = LinearLayout.LayoutParams(sz, sz).apply {
                         marginEnd = dp(12)
                     }
-                    setImageDrawable(app.icon)
+                    setImageDrawable(appIcon(app.packageName))
                 }
 
                 val label = TextView(this@MainActivity).apply {
