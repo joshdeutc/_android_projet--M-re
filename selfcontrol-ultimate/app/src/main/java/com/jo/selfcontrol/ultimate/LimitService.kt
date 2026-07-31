@@ -841,7 +841,7 @@ class LimitService : Service() {
 
         val choiceChannel = NotificationChannel(
             CHOICE_CHANNEL_ID,
-            "SelfControl choices",
+            "Custos choices",
             NotificationManager.IMPORTANCE_HIGH
         ).apply {
             description = "Action prompts when an app becomes blocked"
@@ -852,7 +852,7 @@ class LimitService : Service() {
 
     private fun buildNotification(text: String): Notification {
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("SelfControl")
+            .setContentTitle("Custos")
             .setContentText(text)
             .setSmallIcon(android.R.drawable.ic_lock_idle_lock)
             .setOngoing(true)

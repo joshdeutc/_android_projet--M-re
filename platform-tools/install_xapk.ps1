@@ -1,6 +1,6 @@
 # install_xapk.ps1
 # Installe une .xapk via ADB en gérant les restrictions Device Owner posées
-# par SelfControl Ultimate (DISALLOW_INSTALL_APPS / DISALLOW_INSTALL_UNKNOWN_SOURCES).
+# par Custos (DISALLOW_INSTALL_APPS / DISALLOW_INSTALL_UNKNOWN_SOURCES).
 #
 # Workflow :
 #   1. Broadcast ALLOW_INSTALL  -> lève les restrictions (idempotent)

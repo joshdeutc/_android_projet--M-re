@@ -14,5 +14,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "SelfControlUltimate"
+rootProject.name = "Custos"
 include ':app'

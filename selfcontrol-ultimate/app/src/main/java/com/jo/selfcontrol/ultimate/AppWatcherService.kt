@@ -105,7 +105,7 @@ class AppWatcherService : AccessibilityService() {
         }
     }
 
-    private var appLabel: String = "SelfControl"
+    private var appLabel: String = "Custos"
     private var lastHomeActionTime = 0L
 
     private var overlayView: TextView? = null

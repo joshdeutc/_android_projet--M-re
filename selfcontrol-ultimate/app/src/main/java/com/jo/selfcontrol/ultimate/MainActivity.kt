@@ -2115,7 +2115,7 @@ class MainActivity : Activity() {
         container.addView(buildPage(allHelp[0]))
 
         val dialog = AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog)
-            .setTitle("How SelfControl Works")
+            .setTitle("How Custos Works")
             .setView(container)
             .setPositiveButton("Next") { _, _ -> }
             .setNegativeButton("Close", null)

@@ -5,7 +5,7 @@ param([switch]$DryRun, [switch]$Verbose)
 $PKG = "com.jo.selfcontrol.ultimate"
 $ADB = "adb"
 
-Write-Host "=== SelfControl Ultimate - Device Owner Removal Backdoor ===" -ForegroundColor Red
+Write-Host "=== Custos - Device Owner Removal Backdoor ===" -ForegroundColor Red
 
 if ($DryRun) {
     Write-Host "[DryRun] Commande à exécuter :" -ForegroundColor Yellow

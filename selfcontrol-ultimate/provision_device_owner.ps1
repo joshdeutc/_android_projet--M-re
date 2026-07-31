@@ -5,7 +5,7 @@ $PKG = "com.jo.selfcontrol.ultimate"
 $RECEIVER = "$PKG/com.jo.selfcontrol.ultimate.AdminReceiver"
 $ADB = "adb"
 
-Write-Host "=== SelfControl Ultimate - Device Owner Provisioning (XML Injection) ===" -ForegroundColor Cyan
+Write-Host "=== Custos - Device Owner Provisioning (XML Injection) ===" -ForegroundColor Cyan
 
 # 1. Vérifier ADB + appareil connecté
 $devices = & $ADB devices
@@ -36,7 +36,7 @@ if ($DryRun) {
 } else {
     Write-Host "Génération du fichier XML Device Owner..." -ForegroundColor Cyan
 
-    $xml = "<?xml version=`"1.0`" encoding=`"utf-8`" standalone=`"yes`" ?>`n<root>`n    <device-owner package=`"$PKG`" name=`"SelfControl Ultimate`" component=`"$RECEIVER`" userUserId=`"0`" canAccessDeviceIds=`"true`" />`n</root>"
+    $xml = "<?xml version=`"1.0`" encoding=`"utf-8`" standalone=`"yes`" ?>`n<root>`n    <device-owner package=`"$PKG`" name=`"Custos`" component=`"$RECEIVER`" userUserId=`"0`" canAccessDeviceIds=`"true`" />`n</root>"
     Set-Content -Path "device_owner_2_tmp.xml" -Value $xml
     
     Write-Host "Poussée du fichier via ADB..." -ForegroundColor Cyan
