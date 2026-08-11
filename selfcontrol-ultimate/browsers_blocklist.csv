@@ -1,0 +1,66 @@
+# Install blocklist — navigateurs.
+# Import : bouton "Import CSV" dans la section Install Blocklist, ou depuis le PC.
+#
+# ATTENTION au chemin : le stockage cloisonne d'Android 11+ nous refuse /sdcard avec EACCES
+# (l'app n'a aucune permission de stockage). Il faut pousser dans notre propre dossier externe,
+# ou `adb push` peut ecrire et ou l'app peut lire :
+#   $D = /sdcard/Android/data/com.jo.selfcontrol.ultimate/files
+#   adb push browsers_blocklist.csv $D/browsers_blocklist.csv
+#   adb shell am broadcast -p com.jo.selfcontrol.ultimate \
+#     -a com.jo.selfcontrol.ultimate.IMPORT_INSTALL_BLOCKS --es path $D/browsers_blocklist.csv
+#
+# Le merge est add-only : rien n'est supprimé, aucun timer touché, donc l'import
+# est un durcissement et s'applique immédiatement. Pense à poser le timer de
+# protection du groupe APRES l'import (bouton "Timer"), sinon il retombe sur le
+# délai global.
+#
+# Les packages non installés restent dans la liste et seront masqués si un jour
+# ils apparaissent. Pas besoin de nettoyer ce qui n'est pas sur l'appareil.
+group,package
+Navigateurs,com.android.chrome
+Navigateurs,com.chrome.beta
+Navigateurs,com.chrome.dev
+Navigateurs,com.chrome.canary
+Navigateurs,com.android.browser
+Navigateurs,org.chromium.chrome
+Navigateurs,com.sec.android.app.sbrowser
+Navigateurs,com.sec.android.app.sbrowser.beta
+Navigateurs,org.mozilla.firefox
+Navigateurs,org.mozilla.firefox_beta
+Navigateurs,org.mozilla.fenix
+Navigateurs,org.mozilla.focus
+Navigateurs,org.mozilla.klar
+Navigateurs,com.microsoft.emmx
+Navigateurs,com.microsoft.emmx.beta
+Navigateurs,com.brave.browser
+Navigateurs,com.brave.browser_beta
+Navigateurs,com.opera.browser
+Navigateurs,com.opera.browser.beta
+Navigateurs,com.opera.mini.native
+Navigateurs,com.opera.gx
+Navigateurs,com.duckduckgo.mobile.android
+Navigateurs,com.vivaldi.browser
+Navigateurs,com.kiwibrowser.browser
+Navigateurs,com.yandex.browser
+Navigateurs,com.UCMobile.intl
+Navigateurs,com.uc.browser.en
+Navigateurs,com.tencent.mtt
+Navigateurs,com.mi.globalbrowser
+Navigateurs,com.huawei.browser
+Navigateurs,com.heytap.browser
+Navigateurs,com.coloros.browser
+Navigateurs,com.vivo.browser
+Navigateurs,com.transsion.phoenix
+Navigateurs,com.cloudmosa.puffinFree
+Navigateurs,com.aloha.browser
+Navigateurs,com.ecosia.android
+Navigateurs,com.jio.web
+Navigateurs,mark.via.gp
+Navigateurs,acr.browser.lightning
+Navigateurs,org.torproject.torbrowser
+Navigateurs,org.adblockplus.browser
+# Free Adblocker Browser (HSV) — verifie present sur le Pixel 8a le 2026-08-02.
+# A ne pas confondre avec org.adblockplus.browser (Adblock Browser, eyeo) juste au-dessus.
+Navigateurs,com.hsv.freeadblockerbrowser
+Navigateurs,com.qwant.liberty
+Navigateurs,com.stoutner.privacybrowser.standard

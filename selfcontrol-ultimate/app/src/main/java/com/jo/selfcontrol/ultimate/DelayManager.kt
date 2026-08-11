@@ -278,9 +278,21 @@ object DelayManager {
         return loadState(context).unlockSettingsUnlockTime
     }
 
-    fun requestConfigUpdate(context: Context, newConfigJson: String, description: String) {
+    /**
+     * Queue a config change behind the delay gate.
+     *
+     * [overrideDelaySeconds] lets the caller impose a per-rule `protection_delay_sec` instead of
+     * the global effective delay — see `ConfigManager.requiredDefer`. Passing null keeps the
+     * historical behaviour (global delay + active schedule rules).
+     */
+    fun requestConfigUpdate(
+        context: Context,
+        newConfigJson: String,
+        description: String,
+        overrideDelaySeconds: Int? = null
+    ) {
         val state = loadState(context)
-        val effectiveDelaySeconds = getEffectiveDelaySeconds(state)
+        val effectiveDelaySeconds = overrideDelaySeconds ?: getEffectiveDelaySeconds(state)
         val executeAt = System.currentTimeMillis() + (effectiveDelaySeconds * 1000L)
 
         val updatedList = state.requestedConfigUpdates.toMutableList()

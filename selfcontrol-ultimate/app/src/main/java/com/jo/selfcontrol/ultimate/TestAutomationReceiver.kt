@@ -53,7 +53,7 @@ class TestAutomationReceiver : BroadcastReceiver() {
             muteNotifications = true
         )
 
-        val updated = ConfigManager.Config(cur.limits, cleaned + rule)
+        val updated = ConfigManager.Config(cur.limits, cleaned + rule, cur.installBlocks)
         ConfigManager.saveConfig(context, updated)
         Log.i(TAG, "✅ Test curfew mute enabled for $pkg")
     }
@@ -61,7 +61,7 @@ class TestAutomationReceiver : BroadcastReceiver() {
     private fun clearCurfewRulesForPackage(context: Context, pkg: String) {
         val cur = ConfigManager.loadConfig(context)
         val cleaned = cur.periodBlocks.filterNot { pkg in it.packages }
-        val updated = ConfigManager.Config(cur.limits, cleaned)
+        val updated = ConfigManager.Config(cur.limits, cleaned, cur.installBlocks)
         ConfigManager.saveConfig(context, updated)
         Log.i(TAG, "✅ Test curfew cleared for $pkg")
     }
@@ -83,7 +83,7 @@ class TestAutomationReceiver : BroadcastReceiver() {
             allDay = true
         )
 
-        val updated = ConfigManager.Config(cleaned + limit, cur.periodBlocks)
+        val updated = ConfigManager.Config(cleaned + limit, cur.periodBlocks, cur.installBlocks)
         ConfigManager.saveConfig(context, updated)
         Log.i(TAG, "✅ Test app limit set: $pkg → ${maxSeconds}s/day (mute-on-block=true)")
 
@@ -100,7 +100,7 @@ class TestAutomationReceiver : BroadcastReceiver() {
     private fun clearAppLimit(context: Context, pkg: String) {
         val cur = ConfigManager.loadConfig(context)
         val cleaned = cur.limits.filterNot { it.packageName == pkg }
-        val updated = ConfigManager.Config(cleaned, cur.periodBlocks)
+        val updated = ConfigManager.Config(cleaned, cur.periodBlocks, cur.installBlocks)
         ConfigManager.saveConfig(context, updated)
         Log.i(TAG, "✅ Test app limit cleared for $pkg")
     }

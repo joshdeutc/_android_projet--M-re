@@ -4,6 +4,7 @@ import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
 import android.content.Context
+import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.graphics.Color
@@ -29,6 +30,7 @@ class MainActivity : Activity() {
 
     companion object {
         private const val TAG = "SelfControl.Main"
+        private const val REQ_IMPORT_CSV = 2001
     }
 
     private val handler = Handler(Looper.getMainLooper())
@@ -42,6 +44,7 @@ class MainActivity : Activity() {
     private lateinit var serviceStatusText: TextView
     private lateinit var deviceOwnerStatusText: TextView
     private lateinit var periodBlocksContainer: LinearLayout
+    private lateinit var installBlocksContainer: LinearLayout
 
     private val selectedNuclearApps = mutableSetOf<String>()
     private var selectedDurationMs = 30 * 60 * 1000L
@@ -53,6 +56,7 @@ class MainActivity : Activity() {
             refreshDelayUI()
             refreshNuclearStatus()
             refreshPeriodBlocksUI()
+            refreshInstallBlocksUI()
             handler.postDelayed(this, 1000)
         }
     }
@@ -200,6 +204,45 @@ class MainActivity : Activity() {
             orientation = LinearLayout.VERTICAL
         }
         mainLayout.addView(periodBlocksContainer)
+
+        mainLayout.addView(separator())
+
+        // Install Blocklist Section
+        mainLayout.addView(sectionTitleWithHelp("Install Blocklist", HELP_INSTALL_BLOCK))
+        mainLayout.addView(TextView(this).apply {
+            text = "Named groups of packages that must never run on this device. Any listed app " +
+                "is hidden the moment it appears — including apps preinstalled with the ROM."
+            textSize = 13f
+            setTextColor(Color.parseColor("#AAAAAA"))
+            setPadding(dp(4), 0, dp(4), dp(8))
+        })
+        val installHeader = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        installHeader.addView(Button(this).apply {
+            text = "+ New group"
+            setTextColor(Color.WHITE)
+            background = roundedBackground(Color.parseColor("#333333"))
+            setOnClickListener { showNewInstallGroupDialog() }
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                marginEnd = dp(4)
+            }
+        })
+        installHeader.addView(Button(this).apply {
+            text = "Import CSV"
+            setTextColor(Color.WHITE)
+            background = roundedBackground(Color.parseColor("#333333"))
+            setOnClickListener { launchCsvPicker() }
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                marginStart = dp(4)
+            }
+        })
+        mainLayout.addView(installHeader)
+        installBlocksContainer = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+        }
+        mainLayout.addView(installBlocksContainer)
 
         mainLayout.addView(separator())
 
@@ -787,6 +830,17 @@ class MainActivity : Activity() {
             sessionFields.visibility = if (checked) View.VISIBLE else View.GONE
         }
 
+        // ── Per-rule protection timer ────────────────
+        var protectionDelaySec = existingLimit?.protectionDelaySec
+        root.addView(buildProtectionTimerRow(protectionDelaySec) { protectionDelaySec = it })
+        root.addView(TextView(this).apply {
+            text = "Overrides the global delay for this app only. A huge value makes this limit " +
+                "practically impossible to loosen on impulse."
+            textSize = 12f
+            setTextColor(Color.parseColor("#888888"))
+            setPadding(0, 0, 0, dp(8))
+        })
+
         val scroll = ScrollView(this).apply { addView(root) }
 
         val builder = AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog)
@@ -811,9 +865,10 @@ class MainActivity : Activity() {
                     allowedHoursStart = existingLimit?.allowedHoursStart ?: 0,
                     allowedHoursEnd = existingLimit?.allowedHoursEnd ?: 24 * 60,
                     allDay = existingLimit?.allDay ?: true,
-                    session = session
+                    session = session,
+                    protectionDelaySec = protectionDelaySec
                 ))
-                val newConfig = ConfigManager.Config(newLimits, config.periodBlocks)
+                val newConfig = ConfigManager.Config(newLimits, config.periodBlocks, config.installBlocks)
                 saveConfigWithDelay(newConfig)
             }
             .setNegativeButton("Cancel", null)
@@ -821,7 +876,7 @@ class MainActivity : Activity() {
         if (existingLimit != null) {
             builder.setNeutralButton("Delete timer") { _, _ ->
                 val newLimits = config.limits.filter { it.packageName != pkg }
-                val newConfig = ConfigManager.Config(newLimits, config.periodBlocks)
+                val newConfig = ConfigManager.Config(newLimits, config.periodBlocks, config.installBlocks)
                 saveConfigWithDelay(newConfig)
             }
         }
@@ -856,23 +911,34 @@ class MainActivity : Activity() {
 
     private fun saveConfigWithDelay(newConfig: ConfigManager.Config) {
         val old = loadEditableConfig()
-        val delayState = DelayManager.loadState(this)
-        val mustDefer = delayState.globalDelaySeconds > 0 &&
-            !DelayManager.isSettingsUnlocked(this) &&
-            (ConfigManager.shouldDeferLimitsChange(old, newConfig.limits) ||
-                ConfigManager.shouldDeferPeriodBlocksChange(old.periodBlocks, newConfig.periodBlocks))
 
-        val jsonString = ConfigManager.configToJsonString(newConfig)
+        // Use the EFFECTIVE delay, not the base one. The old gate tested globalDelaySeconds > 0,
+        // so with a base delay of 0 every relaxation slipped through instantly even while a
+        // "Scheduled Delay Rule" was active — the rule only ever influenced executeAt.
+        val globalDelay = DelayManager.getCurrentEffectiveDelaySeconds(this)
+        val requirement = ConfigManager.requiredDefer(old, newConfig, globalDelay)
+
+        // A rule's own protection timer outranks the global delay *and* the settings unlock —
+        // that is what "priority over the general timer" means. A 30-day curfew must not be
+        // defusable through a 1h unlock. Rules without an explicit timer keep the old behaviour.
+        val unlockApplies = !requirement.fromExplicitTimer && DelayManager.isSettingsUnlocked(this)
+        val mustDefer = requirement.mustDefer && !unlockApplies
+
         if (!mustDefer) {
             ConfigManager.saveConfig(this, newConfig)
             Toast.makeText(this, "Config updated.", Toast.LENGTH_SHORT).show()
         } else {
-            val description = describeConfigChange(old, newConfig)
-            DelayManager.requestConfigUpdate(this, jsonString, description)
-            val effectiveDelay = DelayManager.getCurrentEffectiveDelaySeconds(this)
+            DelayManager.requestConfigUpdate(
+                this,
+                ConfigManager.configToJsonString(newConfig),
+                describeConfigChange(old, newConfig),
+                overrideDelaySeconds = requirement.seconds
+            )
+            val scope = if (requirement.fromExplicitTimer) "rule timer" else "global delay"
             Toast.makeText(
                 this,
-                "Change queued. Waiting ${effectiveDelay}s (effective protection delay).",
+                "Change queued for ${formatLongDuration(requirement.seconds)} " +
+                    "($scope — ${requirement.reason}).",
                 Toast.LENGTH_LONG
             ).show()
         }
@@ -923,6 +989,13 @@ class MainActivity : Activity() {
                 textSize = 14f
                 setTextColor(Color.WHITE)
             })
+            rule.protectionDelaySec?.let { sec ->
+                addView(TextView(this@MainActivity).apply {
+                    text = "🔒 Protected — ${formatLongDuration(sec)} to change"
+                    textSize = 12f
+                    setTextColor(Color.parseColor("#FFB74D"))
+                })
+            }
             val buttonRow = LinearLayout(this@MainActivity).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
@@ -950,7 +1023,7 @@ class MainActivity : Activity() {
                 setOnClickListener {
                     val cur = loadEditableConfig()
                     val newList = cur.periodBlocks.toMutableList().also { it.removeAt(index) }
-                    saveConfigWithDelay(ConfigManager.Config(cur.limits, newList))
+                    saveConfigWithDelay(ConfigManager.Config(cur.limits, newList, cur.installBlocks))
                 }
             })
             addView(buttonRow)
@@ -1001,7 +1074,8 @@ class MainActivity : Activity() {
                     existingEndH = existingRule.blockedEndMinutes / 60,
                     existingEndM = existingRule.blockedEndMinutes % 60,
                     existingDays = existingRule.allowedDays.toSet(),
-                    existingMute = existingRule.muteNotifications
+                    existingMute = existingRule.muteNotifications,
+                    existingProtectionDelaySec = existingRule.protectionDelaySec
                 )
             }
             .setNegativeButton("Cancel", null)
@@ -1016,7 +1090,8 @@ class MainActivity : Activity() {
         existingStartH: Int = 22, existingStartM: Int = 0,
         existingEndH: Int = 7, existingEndM: Int = 0,
         existingDays: Set<Int> = (0..6).toSet(),
-        existingMute: Boolean = false
+        existingMute: Boolean = false,
+        existingProtectionDelaySec: Int? = null
     ) {
         val wrap = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -1098,6 +1173,15 @@ class MainActivity : Activity() {
         muteRow.addView(muteSwitch)
         wrap.addView(muteRow)
 
+        var protectionDelaySec = existingProtectionDelaySec
+        wrap.addView(buildProtectionTimerRow(protectionDelaySec) { protectionDelaySec = it })
+        wrap.addView(TextView(this).apply {
+            text = "Set a huge timer here to make this curfew practically permanent."
+            textSize = 12f
+            setTextColor(Color.parseColor("#888888"))
+            setPadding(0, 0, 0, dp(8))
+        })
+
         val dialogTitle = if (editIndex >= 0) "Edit curfew hours" else "Curfew hours"
         val dialog = AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog)
             .setTitle(dialogTitle)
@@ -1119,14 +1203,315 @@ class MainActivity : Activity() {
                     blockedStartMinutes = startMin,
                     blockedEndMinutes = endMin,
                     allowedDays = selectedDays.sorted(),
-                    muteNotifications = muteNotifications
+                    muteNotifications = muteNotifications,
+                    protectionDelaySec = protectionDelaySec
                 )
                 val newList = if (editIndex >= 0) {
                     cur.periodBlocks.toMutableList().also { it[editIndex] = newRule }
                 } else {
                     cur.periodBlocks + newRule
                 }
-                saveConfigWithDelay(ConfigManager.Config(cur.limits, newList))
+                saveConfigWithDelay(ConfigManager.Config(cur.limits, newList, cur.installBlocks))
+            }
+            .setNegativeButton("Cancel", null)
+            .create()
+        styleDialogForDarkTheme(dialog)
+        dialog.show()
+    }
+
+    // ──────────────────────────────────────
+    //  Install Blocklist
+    // ──────────────────────────────────────
+
+    private fun refreshInstallBlocksUI() {
+        installBlocksContainer.removeAllViews()
+        val cfg = ConfigManager.loadConfig(this)
+        if (cfg.installBlocks.isEmpty()) {
+            installBlocksContainer.addView(TextView(this).apply {
+                text = "No install-block group."
+                textSize = 14f
+                setTextColor(Color.parseColor("#888888"))
+                setPadding(dp(8), dp(8), dp(8), dp(8))
+            })
+            return
+        }
+        val neutralised = InstallBlockManager.loadHiddenState(this)
+        for (group in cfg.installBlocks) {
+            installBlocksContainer.addView(buildInstallGroupRow(group, neutralised))
+        }
+    }
+
+    private fun buildInstallGroupRow(
+        group: ConfigManager.InstallBlockGroup,
+        neutralised: Set<String>
+    ): LinearLayout {
+        val activeCount = group.packages.count { it in neutralised }
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(8), dp(8), dp(8), dp(8))
+            background = roundedBackground(Color.parseColor("#222222"))
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = dp(8) }
+
+            addView(TextView(this@MainActivity).apply {
+                text = group.name
+                textSize = 15f
+                typeface = Typeface.DEFAULT_BOLD
+                setTextColor(Color.WHITE)
+                setOnClickListener { showInstallGroupPackagesDialog(group, neutralised) }
+            })
+            addView(TextView(this@MainActivity).apply {
+                text = "${group.packages.size} package(s) listed — $activeCount currently neutralised"
+                textSize = 13f
+                setTextColor(Color.parseColor("#AAAAAA"))
+            })
+            addView(TextView(this@MainActivity).apply {
+                text = if (group.protectionDelaySec != null) {
+                    "🔒 Protected — ${formatLongDuration(group.protectionDelaySec)} to change"
+                } else {
+                    "Protection: global delay"
+                }
+                textSize = 12f
+                setTextColor(
+                    if (group.protectionDelaySec != null) Color.parseColor("#FFB74D")
+                    else Color.parseColor("#888888")
+                )
+            })
+
+            addView(LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { topMargin = dp(4) }
+
+                addView(Button(this@MainActivity).apply {
+                    text = "Apps"
+                    setTextColor(Color.WHITE)
+                    background = roundedBackground(Color.parseColor("#BB86FC"))
+                    layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                        .apply { marginEnd = dp(4) }
+                    setOnClickListener { showEditInstallGroupAppsDialog(group) }
+                })
+                addView(Button(this@MainActivity).apply {
+                    text = "Timer"
+                    setTextColor(Color.WHITE)
+                    background = roundedBackground(Color.parseColor("#333333"))
+                    layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                        .apply { marginEnd = dp(4) }
+                    setOnClickListener {
+                        showProtectionTimerDialog(group.protectionDelaySec) { picked ->
+                            updateInstallGroup(group.name) { it.copy(protectionDelaySec = picked) }
+                        }
+                    }
+                })
+                addView(Button(this@MainActivity).apply {
+                    text = "Delete"
+                    setTextColor(Color.WHITE)
+                    background = roundedBackground(Color.parseColor("#D32F2F"))
+                    layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                        .apply { marginStart = dp(4) }
+                    setOnClickListener { confirmDeleteInstallGroup(group) }
+                })
+            })
+        }
+    }
+
+    private fun showInstallGroupPackagesDialog(
+        group: ConfigManager.InstallBlockGroup,
+        neutralised: Set<String>
+    ) {
+        val body = group.packages.sorted().joinToString("\n") { pkg ->
+            val mark = if (pkg in neutralised) "🚫" else "·"
+            "$mark $pkg"
+        }
+        val dialog = AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog)
+            .setTitle(group.name)
+            .setMessage("🚫 = installed and neutralised, · = not installed (blocked on sight)\n\n$body")
+            .setPositiveButton("Close", null)
+            .create()
+        styleDialogForDarkTheme(dialog)
+        dialog.show()
+    }
+
+    private fun showNewInstallGroupDialog() {
+        val input = EditText(this).apply {
+            hint = "Group name (e.g. Browsers)"
+            setTextColor(Color.WHITE)
+            setHintTextColor(Color.parseColor("#888888"))
+        }
+        val wrap = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(24), dp(16), dp(24), dp(8))
+            addView(input)
+        }
+        val dialog = AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog)
+            .setTitle("New install-block group")
+            .setView(wrap)
+            .setPositiveButton("Next") { _, _ ->
+                val name = input.text.toString().trim()
+                if (name.isEmpty()) {
+                    Toast.makeText(this, "Name required", Toast.LENGTH_SHORT).show()
+                    return@setPositiveButton
+                }
+                if (loadEditableConfig().installBlocks.any { it.name == name }) {
+                    Toast.makeText(this, "A group named \"$name\" already exists", Toast.LENGTH_SHORT).show()
+                    return@setPositiveButton
+                }
+                showEditInstallGroupAppsDialog(ConfigManager.InstallBlockGroup(name, emptyList()))
+            }
+            .setNegativeButton("Cancel", null)
+            .create()
+        styleDialogForDarkTheme(dialog)
+        dialog.show()
+    }
+
+    /**
+     * The picker only lists *installed launchable* apps, so packages that came from a CSV and
+     * aren't installed (the whole point of a blocklist) would vanish on save. They are carried
+     * over untouched and reported in the dialog.
+     */
+    private fun showEditInstallGroupAppsDialog(group: ConfigManager.InstallBlockGroup) {
+        val apps = getInstalledLaunchableApps()
+        val listed = apps.map { it.packageName }.toSet()
+        val invisible = group.packages.filterNot { it in listed }
+        val selected = mutableSetOf<String>()
+
+        val listView = buildAppCheckListView(apps, selected, preChecked = group.packages.toSet())
+
+        // The note goes in the dialog's own message slot rather than a wrapper LinearLayout: a
+        // weighted ListView inside a WRAP_CONTENT dialog view collapses to zero height.
+        val builder = AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog)
+            .setTitle("Apps blocked in ${group.name}")
+            .setView(listView)
+        if (invisible.isNotEmpty()) {
+            builder.setMessage(
+                "${invisible.size} listed package(s) aren't installed and stay in the group — " +
+                    "edit those via CSV import."
+            )
+        }
+
+        val dialog = builder
+            .setPositiveButton("Save") { _, _ ->
+                val packages = (selected + invisible).distinct()
+                if (packages.isEmpty()) {
+                    Toast.makeText(this, "Select at least one app", Toast.LENGTH_SHORT).show()
+                    return@setPositiveButton
+                }
+                val cur = loadEditableConfig()
+                val exists = cur.installBlocks.any { it.name == group.name }
+                val updated = if (exists) {
+                    cur.installBlocks.map {
+                        if (it.name == group.name) it.copy(packages = packages) else it
+                    }
+                } else {
+                    cur.installBlocks + group.copy(packages = packages)
+                }
+                saveConfigWithDelay(cur.copy(installBlocks = updated))
+            }
+            .setNegativeButton("Cancel", null)
+            .create()
+        styleDialogForDarkTheme(dialog)
+        dialog.show()
+    }
+
+    private fun updateInstallGroup(
+        name: String,
+        transform: (ConfigManager.InstallBlockGroup) -> ConfigManager.InstallBlockGroup
+    ) {
+        val cur = loadEditableConfig()
+        val updated = cur.installBlocks.map { if (it.name == name) transform(it) else it }
+        saveConfigWithDelay(cur.copy(installBlocks = updated))
+    }
+
+    private fun confirmDeleteInstallGroup(group: ConfigManager.InstallBlockGroup) {
+        val wait = group.protectionDelaySec
+            ?: DelayManager.getCurrentEffectiveDelaySeconds(this)
+        val dialog = AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog)
+            .setTitle("Delete \"${group.name}\"?")
+            .setMessage(
+                "${group.packages.size} package(s) would become installable and usable again.\n\n" +
+                    "This is a relaxation, so it waits ${formatLongDuration(wait)} before taking " +
+                    "effect. Apps are un-hidden only once that delay expires."
+            )
+            .setPositiveButton("Request deletion") { _, _ ->
+                val cur = loadEditableConfig()
+                saveConfigWithDelay(
+                    cur.copy(installBlocks = cur.installBlocks.filterNot { it.name == group.name })
+                )
+            }
+            .setNegativeButton("Cancel", null)
+            .create()
+        styleDialogForDarkTheme(dialog)
+        dialog.show()
+    }
+
+    // ── CSV import ──────────────────────────────────────
+
+    private fun launchCsvPicker() {
+        // Providers report CSV as text/csv, text/comma-separated-values, text/plain or
+        // application/octet-stream depending on the source — filtering would hide real files.
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "*/*"
+        }
+        try {
+            startActivityForResult(intent, REQ_IMPORT_CSV)
+        } catch (e: Exception) {
+            Toast.makeText(this, "No file picker available: ${e.message}", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != REQ_IMPORT_CSV || resultCode != RESULT_OK) return
+        val uri = data?.data ?: return
+        val text = try {
+            contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
+        } catch (e: Exception) {
+            Log.e(TAG, "CSV read failed: ${e.message}")
+            null
+        }
+        if (text.isNullOrBlank()) {
+            Toast.makeText(this, "Could not read that file.", Toast.LENGTH_LONG).show()
+            return
+        }
+        confirmCsvImport(text)
+    }
+
+    private fun confirmCsvImport(text: String) {
+        val result = InstallBlockManager.parseCsv(text)
+        if (result.entries.isEmpty()) {
+            val hint = if (result.rejected.isEmpty()) {
+                "The file is empty."
+            } else {
+                "${result.rejected.size} line(s) rejected. Expected columns: group,package"
+            }
+            Toast.makeText(this, "No valid row found. $hint", Toast.LENGTH_LONG).show()
+            return
+        }
+
+        val perGroup = result.entries.groupBy({ it.first }, { it.second })
+            .entries.sortedBy { it.key }
+            .joinToString("\n") { "  • ${it.key}: ${it.value.distinct().size} package(s)" }
+        val rejectedNote = if (result.rejected.isEmpty()) "" else
+            "\n\n${result.rejected.size} line(s) ignored (not a package name):\n" +
+                result.rejected.take(5).joinToString("\n") { "  ✗ $it" } +
+                if (result.rejected.size > 5) "\n  …" else ""
+
+        val dialog = AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog)
+            .setTitle("Import ${result.packageCount} package(s)?")
+            .setMessage(
+                "$perGroup$rejectedNote\n\n" +
+                    "Merge is add-only: existing groups gain packages, nothing is removed and no " +
+                    "timer changes. That makes it a hardening, so it applies immediately."
+            )
+            .setPositiveButton("Import") { _, _ ->
+                val cur = loadEditableConfig()
+                saveConfigWithDelay(InstallBlockManager.mergeIntoConfig(cur, result))
             }
             .setNegativeButton("Cancel", null)
             .create()
@@ -1815,6 +2200,160 @@ class MainActivity : Activity() {
         }
     }
 
+    /**
+     * Coarse, readable duration for protection timers, which run to weeks — [formatTime] would
+     * render 30 days as "720h00m00s".
+     */
+    private fun formatLongDuration(seconds: Int): String {
+        if (seconds <= 0) return "no delay"
+        val d = seconds / 86_400
+        val h = (seconds % 86_400) / 3600
+        val m = (seconds % 3600) / 60
+        val parts = mutableListOf<String>()
+        if (d > 0) parts.add("${d}d")
+        if (h > 0) parts.add("${h}h")
+        if (m > 0 && d == 0) parts.add("${m}min")
+        if (parts.isEmpty()) parts.add("${seconds}s")
+        return parts.joinToString(" ")
+    }
+
+    /** Label for a rule's own timer — null means "inherit the global delay". */
+    private fun protectionTimerLabel(seconds: Int?): String =
+        if (seconds == null) "global delay" else formatLongDuration(seconds)
+
+    /**
+     * Pick a rule's own protection timer. Presets rather than a NumberPicker: the useful range
+     * runs from an hour to a month, which no scroll wheel handles gracefully.
+     *
+     * Lowering the value is itself a relaxation, so it goes back through the delay gate at save
+     * time (ConfigManager.requiredDefer) — the dialog says so rather than silently deferring.
+     */
+    private fun showProtectionTimerDialog(current: Int?, onPicked: (Int?) -> Unit) {
+        val presets = listOf<Pair<String, Int?>>(
+            "Use global delay" to null,
+            "1 hour" to 3_600,
+            "6 hours" to 21_600,
+            "24 hours" to 86_400,
+            "3 days" to 259_200,
+            "7 days" to 604_800,
+            "30 days" to 2_592_000
+        )
+
+        val column = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(24), dp(8), dp(24), dp(8))
+        }
+        column.addView(TextView(this).apply {
+            text = "Currently: ${protectionTimerLabel(current)}.\n\n" +
+                "This timer replaces the global delay for this rule only. Raising it applies " +
+                "immediately; lowering or removing it has to wait out the current timer."
+            textSize = 13f
+            setTextColor(Color.parseColor("#AAAAAA"))
+            setPadding(0, 0, 0, dp(12))
+        })
+
+        // The choices live in a custom view, not in setItems(): AlertController gives the message
+        // and the setItems() list the same slot, so a builder with both renders the text and
+        // silently drops every choice — the dialog came up with nothing but "Cancel".
+        val dialog = AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog)
+            .setTitle("Protection timer")
+            .setView(ScrollView(this).apply { addView(column) })
+            .setNegativeButton("Cancel", null)
+            .create()
+
+        fun addChoice(label: String, highlighted: Boolean, onClick: () -> Unit) {
+            column.addView(Button(this).apply {
+                text = label
+                textSize = 14f
+                setTextColor(Color.WHITE)
+                background = roundedBackground(
+                    if (highlighted) Color.parseColor("#BB86FC") else Color.parseColor("#333333")
+                )
+                setOnClickListener {
+                    dialog.dismiss()
+                    onClick()
+                }
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { bottomMargin = dp(6) }
+            })
+        }
+
+        for ((label, value) in presets) {
+            addChoice(label, highlighted = value == current) { onPicked(value) }
+        }
+        addChoice("Custom (hours)…", highlighted = false) {
+            showCustomProtectionTimerDialog(current, onPicked)
+        }
+
+        styleDialogForDarkTheme(dialog)
+        dialog.show()
+    }
+
+    private fun showCustomProtectionTimerDialog(current: Int?, onPicked: (Int?) -> Unit) {
+        val picker = NumberPicker(this).apply {
+            minValue = 1
+            maxValue = 8_760          // one year
+            value = ((current ?: 3_600) / 3_600).coerceIn(1, 8_760)
+            wrapSelectorWheel = false
+        }
+        val wrap = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(24), dp(16), dp(24), dp(16))
+            addView(TextView(this@MainActivity).apply {
+                text = "Hours"
+                setTextColor(Color.WHITE)
+            })
+            addView(picker)
+        }
+        val dialog = AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog)
+            .setTitle("Custom protection timer")
+            .setView(wrap)
+            .setPositiveButton("OK") { _, _ -> onPicked(picker.value * 3_600) }
+            .setNegativeButton("Back") { _, _ -> showProtectionTimerDialog(current, onPicked) }
+            .create()
+        styleDialogForDarkTheme(dialog)
+        dialog.show()
+    }
+
+    /**
+     * "Protection timer: X" plus a button that reassigns [holder] — used by the app-limit and
+     * curfew editors, which both keep the pending value in a local var until Save.
+     */
+    private fun buildProtectionTimerRow(
+        initial: Int?,
+        onChanged: (Int?) -> Unit
+    ): LinearLayout {
+        var current = initial
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(16), 0, dp(4))
+        }
+        val label = TextView(this).apply {
+            text = "Protection timer: ${protectionTimerLabel(current)}"
+            textSize = 14f
+            setTextColor(Color.WHITE)
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        row.addView(label)
+        row.addView(Button(this).apply {
+            text = "Change"
+            textSize = 12f
+            setTextColor(Color.WHITE)
+            background = roundedBackground(Color.parseColor("#333333"))
+            setOnClickListener {
+                showProtectionTimerDialog(current) { picked ->
+                    current = picked
+                    label.text = "Protection timer: ${protectionTimerLabel(picked)}"
+                    onChanged(picked)
+                }
+            }
+        })
+        return row
+    }
+
     private fun dp(value: Int): Int {
         return (value * resources.displayMetrics.density).toInt()
     }
@@ -1875,9 +2414,14 @@ class MainActivity : Activity() {
             "Choose a delay duration (e.g. 30 minutes, 1 hour).",
             "Once set, ANY change you make (adding/removing apps, editing curfews, uninstalling) will require waiting for the full delay before it takes effect.",
             "This gives you time to reconsider — by the time the delay expires, the urge to change your settings will likely have passed.",
-            "Think of it like a cooling-off period for your digital willpower."
+            "Think of it like a cooling-off period for your digital willpower.",
+            "Any single rule can also carry its OWN timer, which overrides this global one — see " +
+                "the 'Protection timer' row when editing a limit, a curfew or an install group.",
+            "A rule's own timer also survives a settings unlock, so a heavily protected curfew " +
+                "cannot be defused through the unlock shortcut."
         ),
-        tip = "Start with a short delay (30min) and increase it as you get comfortable."
+        tip = "Start with a short delay (30min) and increase it as you get comfortable. Save a " +
+            "huge per-rule timer for the one or two rules you never want to negotiate with."
     )
 
     private val HELP_APP_LIMITS = HelpContent(
@@ -1908,6 +2452,24 @@ class MainActivity : Activity() {
             "You can create multiple curfew rules for different apps and schedules."
         ),
         tip = "Great for social media at night — set a curfew from 10pm to 7am on weekdays."
+    )
+
+    private val HELP_INSTALL_BLOCK = HelpContent(
+        title = "Install Blocklist",
+        emoji = "🚫",
+        summary = "Name a batch of apps that must never run here — browsers, stores, anything you " +
+            "don't want a way back into. Listed apps are hidden the instant they appear.",
+        steps = listOf(
+            "Tap '+ New group', name it (e.g. Browsers), then pick the apps.",
+            "For a long list, write a CSV with two columns — group,package — and tap 'Import CSV'.",
+            "Any listed app already on the device is hidden right away, preinstalled ones included.",
+            "If one ever gets installed later, it is hidden within milliseconds of appearing.",
+            "Give each group its own protection timer so undoing it takes real time.",
+            "Adding to a group is instant; removing waits out the group's timer."
+        ),
+        tip = "Android has no API to block a specific package from being installed, so this hides " +
+            "apps instead of refusing the install — same result, and it also works on apps that " +
+            "shipped with the ROM and cannot be uninstalled at all."
     )
 
     private val HELP_NUCLEAR = HelpContent(

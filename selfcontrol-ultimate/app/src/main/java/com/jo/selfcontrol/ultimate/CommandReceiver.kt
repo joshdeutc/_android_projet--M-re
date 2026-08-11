@@ -24,6 +24,17 @@ import android.util.Log
  * Recovery — force-unsuspend every package suspended by our DO admin.
  * Useful when an app is stuck "App paused" after a daily reset bug or service kill.
  *   adb shell am broadcast -p com.jo.selfcontrol.ultimate -a com.jo.selfcontrol.ultimate.UNSUSPEND_ALL
+ *
+ * Import an install blocklist CSV (group,package) pushed to the device.
+ * Add-only merge, so it is a hardening and applies immediately — no delay gate.
+ *
+ * The file MUST land in our own external files dir. Scoped storage (Android 11+) denies us
+ * /sdcard with EACCES since we hold no storage permission, while `adb push` can still write
+ * there — so this is the one path that works for both sides:
+ *   adb push blocklist.csv /sdcard/Android/data/com.jo.selfcontrol.ultimate/files/blocklist.csv
+ *   adb shell am broadcast -p com.jo.selfcontrol.ultimate \
+ *     -a com.jo.selfcontrol.ultimate.IMPORT_INSTALL_BLOCKS \
+ *     --es path /sdcard/Android/data/com.jo.selfcontrol.ultimate/files/blocklist.csv
  */
 class CommandReceiver : BroadcastReceiver() {
 
@@ -36,7 +47,33 @@ class CommandReceiver : BroadcastReceiver() {
             "com.jo.selfcontrol.ultimate.UNSUSPEND_ALL" -> handleUnsuspendAll(context)
             "com.jo.selfcontrol.ultimate.EXPORT_LOG" -> handleExportLog(context)
             "com.jo.selfcontrol.ultimate.CLEAR_LOG" -> handleClearLog(context)
+            "com.jo.selfcontrol.ultimate.IMPORT_INSTALL_BLOCKS" ->
+                handleImportInstallBlocks(context, intent.getStringExtra("path"))
         }
+    }
+
+    private fun handleImportInstallBlocks(context: Context, path: String?) {
+        if (path.isNullOrBlank()) {
+            Log.e("SelfControl.Cmd", "IMPORT_INSTALL_BLOCKS: missing --es path")
+            return
+        }
+        val text = InstallBlockManager.readCsvFile(path)
+        if (text == null) {
+            Log.e("SelfControl.Cmd", "IMPORT_INSTALL_BLOCKS: cannot read $path")
+            return
+        }
+        val result = InstallBlockManager.parseCsv(text)
+        if (result.entries.isEmpty()) {
+            Log.e("SelfControl.Cmd", "IMPORT_INSTALL_BLOCKS: no valid row in $path")
+            return
+        }
+        val current = ConfigManager.loadConfig(context)
+        val merged = InstallBlockManager.mergeIntoConfig(current, result)
+        ConfigManager.saveConfig(context, merged)
+        val summary = "${result.packageCount} package(s) / ${result.groupCount} group(s)" +
+            if (result.rejected.isEmpty()) "" else ", ${result.rejected.size} line(s) rejected"
+        Log.w("SelfControl.Cmd", "=== IMPORT_INSTALL_BLOCKS → $summary ===")
+        EventLog.log(context, "CMD", "IMPORT_INSTALL_BLOCKS $path → $summary")
     }
 
     private fun handleExportLog(context: Context) {

@@ -35,6 +35,7 @@
                 <action android:name="com.jo.selfcontrol.ultimate.UNSUSPEND_ALL" />
                 <action android:name="com.jo.selfcontrol.ultimate.EXPORT_LOG" />
                 <action android:name="com.jo.selfcontrol.ultimate.CLEAR_LOG" />
+                <action android:name="com.jo.selfcontrol.ultimate.IMPORT_INSTALL_BLOCKS" />
             </intent-filter>
         </receiver>
 

@@ -11,6 +11,7 @@ Puisque l'application est configurée comme Device Owner (activé via l'injectio
 - **Auto-réactivation de l'Accessibilité** si elle est coupée, via la réécriture forcée du paramètre sécurisé `ENABLED_ACCESSIBILITY_SERVICES`. *Ne fonctionne plus sur Android 15 (cf. `docs/DEVICE_OWNER_PROVISIONING.md` — la couche A11Y se protège elle-même via interception des events Settings).*
 - **Suspension système des applications** : gèle complètement l'accès et grise les icônes des apps restreintes via `setPackagesSuspended()`. Cycle de vie détaillé dans `docs/APP_SUSPENSION_LIFECYCLE.md`.
 - **Interdiction formelle des installations** : bloque le Play Store et les APK téléchargés via `DISALLOW_INSTALL_APPS` et `DISALLOW_INSTALL_UNKNOWN_SOURCES`. Seul un ordinateur via ADB avec une action précise peut installer une autre application.
+- **Blacklist par package** (2e couche, ajoutée le 2026-07-31) : ces restrictions étant globales, `InstallBlockManager` complète avec des groupes nommés de packages interdits, masqués via `setApplicationHidden()` dès qu'ils apparaissent. Couvre la fenêtre où `ALLOW_INSTALL` est levée pour un install PC, et les apps préinstallées du ROM qu'on ne peut pas désinstaller. Import CSV. Voir `docs/INSTALL_BLOCKLIST.md`. **Note :** aucune API Android ne bloque l'installation d'un package précis — l'enforcement est réactif par conception, pas préventif.
 - **Restrictions complémentaires** : `DISALLOW_FACTORY_RESET` et `DISALLOW_SAFE_BOOT` (le mode safe désactiverait l'A11Y).
 
 ## 2. Couche AccessibilityService (Espace Utilisateur)
@@ -25,7 +26,14 @@ Tournant en arrière-plan, le service d'accès (`AppWatcherService`) soutient l'
 - **Quota quotidien** (`maxSecondsPerDay`) — usage cumulé via `UsageStatsManager`, reset à 02h00 (jour logique).
 - **Curfew / Period blocks** — plages horaires interdites, indépendantes du quota. Peut couper aussi les notifications (`SelfControlNotificationListener`).
 - **Allowed days / hours** — restrictions par jour de semaine et plage horaire.
+- **Blocage d'installation** — groupes nommés de packages qui ne doivent jamais tourner (`install_blocks` dans `limits.json`). Hors du tick d'enforcement : réagit à `ACTION_PACKAGE_ADDED` et au démarrage du service. Voir `docs/INSTALL_BLOCKLIST.md`.
 - **Nuclear Mode** — blocage temporaire renforcé d'un set d'apps. État persisté via `NuclearManager`. Utilise `setApplicationHidden()` en plus de la suspension. Presets nommés (apps + durée) gérés par `NuclearPresetsManager` — voir `docs/NUCLEAR_PRESETS.md`. **Note :** l'override DND a été retiré (2026-05-11) pour respecter les exceptions Android définies par l'utilisateur ; le blocage des notifs reste assuré par `SelfControlNotificationListener` quand actif.
+
+## Délai anti-triche
+
+`DelayManager` garde tout assouplissement derrière une file d'attente : un changement favorable à l'utilisateur n'est jamais appliqué immédiatement, il est stocké dans `pending_configs` avec une échéance et appliqué par `LimitService`. Le durcissement, lui, passe instantanément.
+
+Depuis le 2026-07-31, chaque règle peut porter un `protection_delay_sec` propre, **prioritaire sur le délai global** — et qui survit au settings unlock, contrairement au délai global. C'est ce qui permet une curfew verrouillée 30 jours à côté d'un quota négociable en 1 h. Voir `docs/PER_RULE_PROTECTION_DELAY.md`.
 
 ## Robustesse au redémarrage
 

@@ -1,0 +1,64 @@
+# Install blocklist — groupe "Divertissement".
+#
+# Import (voir browsers_blocklist.csv pour le detail du chemin impose par le stockage cloisonne) :
+#   $D = /sdcard/Android/data/com.jo.selfcontrol.ultimate/files
+#   adb push entertainment_blocklist.csv $D/entertainment_blocklist.csv
+#   adb shell am broadcast -p com.jo.selfcontrol.ultimate \
+#     -a com.jo.selfcontrol.ultimate.IMPORT_INSTALL_BLOCKS --es path $D/entertainment_blocklist.csv
+#
+# EXCLUS VOLONTAIREMENT, sur demande explicite :
+#   co.feeld              (Feeld)   -> reste sous quota App Limits
+#   com.chyrpe.chyrpe     (Chyrpe)  -> reste sous limite de session
+#   com.jo.notubeplayer             -> ton app, et gestionnaire des liens http:// du telephone.
+#                                      La masquer casserait l'ouverture de tout lien web.
+#   tv.arte.plus7         (ARTE)    -> non nomme, et tu lui as mis un quota de 45 min expres
+#
+# CONFIANCE DES NOMS DE PACKAGE — ca compte, parce qu'un nom errone n'echoue pas
+# bruyamment : il ne correspond juste jamais a rien, en silence.
+#   [OK]     verifie sur ton Pixel le 2026-08-04 via `pm list packages`
+#   [SUR]    package tres largement connu, risque d'erreur faible
+#   [MEMOIRE] de memoire, non verifiable ici puisque l'app n'est pas installee
+group,package
+
+# ── Messagerie / communaute ────────────────────────────────────────
+# [OK] seule app de cette liste reellement presente sur l'appareil :
+#      elle disparaitra des l'import.
+Divertissement,com.discord
+
+# ── Streaming video ───────────────────────────────────────────────
+# [SUR]
+Divertissement,com.netflix.mediaclient
+Divertissement,com.disney.disneyplus
+Divertissement,com.amazon.avod.thirdpartyclient
+Divertissement,tv.twitch.android.app
+# [MEMOIRE]
+Divertissement,com.hulu.plus
+Divertissement,com.wbd.stream
+Divertissement,com.paramount.android.pplus
+Divertissement,com.apple.atve.androidtv.appletv
+Divertissement,com.crunchyroll.crunchyroid
+
+# ── Compagnons IA / petite amie fictive ───────────────────────────
+# [MEMOIRE] pour toutes. Voir la note sur la longue traine plus bas.
+Divertissement,ai.replika.app
+Divertissement,ai.character.app
+Divertissement,com.chai.chaiapp
+Divertissement,ai.nomi.nomi
+Divertissement,com.kindroid.kindroid
+Divertissement,ai.candy.candyai
+Divertissement,com.anima.aichat
+Divertissement,com.romanticai.chat
+Divertissement,com.paradot.ai
+Divertissement,com.igirl.aichat
+
+# ── Assistants IA generalistes ────────────────────────────────────
+# [SUR]
+Divertissement,com.openai.chatgpt
+Divertissement,com.google.android.apps.bard
+# [MEMOIRE]
+Divertissement,com.anthropic.claude
+Divertissement,com.microsoft.copilot
+Divertissement,com.microsoft.bing
+Divertissement,ai.perplexity.app.android
+Divertissement,com.deepseek.chat
+Divertissement,xyz.grok.android
