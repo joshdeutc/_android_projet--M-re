@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes" ?>
+<root>
+    <device-owner package="com.jo.selfcontrol.ultimate" name="Custos" component="com.jo.selfcontrol.ultimate/com.jo.selfcontrol.ultimate.AdminReceiver" userUserId="0" canAccessDeviceIds="true" />
+</root>

@@ -349,6 +349,9 @@ class LimitService : Service() {
         // Enforce curfew notification muting for ALL packages in period block rules
         enforceCurfewNotificationMuting()
 
+        // Time-boxed install window enforcement
+        InstallWindowManager.enforce(this)
+
         // Check if any suspended apps should be unblocked (curfew ended, allowed hours started, etc.)
         checkAndUnblockApps()
 
@@ -358,6 +361,11 @@ class LimitService : Service() {
                 blockApp(currentApp, "curfew")
                 return
             }
+        }
+
+        if (currentApp in InstallWindowManager.INSTALLER_PACKAGES && InstallWindowManager.isOpen(this)) {
+            // Installer app (e.g. Play Store) is permitted while the install window is open
+            return
         }
 
         val limit = limitsByPackage[currentApp] ?: return
@@ -502,6 +510,9 @@ class LimitService : Service() {
     }
 
     private fun shouldStayBlockedForNonCurfewReasons(packageName: String): Boolean {
+        if (packageName in InstallWindowManager.INSTALLER_PACKAGES && InstallWindowManager.isOpen(this)) {
+            return false
+        }
         val nuclear = nuclearState
         if (nuclear != null && nuclear.active && !NuclearManager.isExpired(nuclear) &&
             packageName in nuclear.blockedPackages

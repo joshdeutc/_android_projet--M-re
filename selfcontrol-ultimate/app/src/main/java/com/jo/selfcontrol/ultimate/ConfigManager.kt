@@ -61,6 +61,11 @@ class ConfigManager {
                 allowedDays.sorted().joinToString(",")
     }
 
+    data class ChannelBlock(
+        val badPageKeyword: String,
+        val redirectButtonText: String
+    )
+
     data class AppLimit(
         val packageName: String,
         val maxMinutesPerDay: Int,
@@ -70,7 +75,8 @@ class ConfigManager {
         val allowedHoursEnd: Int,       // minutes depuis minuit (ex: 1200 = 20:00)
         val allDay: Boolean,            // true si allowed_hours = "*"
         val session: SessionConfig? = null,  // null = no per-unlock session limit
-        val protectionDelaySec: Int? = null
+        val protectionDelaySec: Int? = null,
+        val channelBlocks: List<ChannelBlock> = emptyList()
     )
 
     /**
@@ -205,6 +211,15 @@ class ConfigManager {
                         })
                     }
                     limit.protectionDelaySec?.let { put("protection_delay_sec", it) }
+                    
+                    val cbArray = org.json.JSONArray()
+                    for (cb in limit.channelBlocks) {
+                        cbArray.put(JSONObject().apply {
+                            put("bad_page_keyword", cb.badPageKeyword)
+                            put("redirect_button_text", cb.redirectButtonText)
+                        })
+                    }
+                    put("channel_blocks", cbArray)
                 }
                 limitsArray.put(obj)
             }
@@ -435,6 +450,18 @@ class ConfigManager {
                     )
                 } else null
 
+                val channelBlocks = mutableListOf<ChannelBlock>()
+                val cbArr = obj.optJSONArray("channel_blocks")
+                if (cbArr != null) {
+                    for (j in 0 until cbArr.length()) {
+                        val cbObj = cbArr.getJSONObject(j)
+                        channelBlocks.add(ChannelBlock(
+                            badPageKeyword = cbObj.getString("bad_page_keyword"),
+                            redirectButtonText = cbObj.getString("redirect_button_text")
+                        ))
+                    }
+                }
+
                 limits.add(AppLimit(
                     packageName = pkg,
                     maxMinutesPerDay = maxMin,
@@ -444,7 +471,8 @@ class ConfigManager {
                     allowedHoursEnd = endMinutes,
                     allDay = allDay,
                     session = sessionConfig,
-                    protectionDelaySec = parseProtectionDelay(obj)
+                    protectionDelaySec = parseProtectionDelay(obj),
+                    channelBlocks = channelBlocks
                 ))
             }
 
@@ -511,7 +539,7 @@ class ConfigManager {
         /**
          * Parse "18:30" → 1110 (minutes depuis minuit)
          */
-        private fun parseTimeToMinutes(time: String): Int {
+        internal fun parseTimeToMinutes(time: String): Int {
             val parts = time.trim().split(":")
             return parts[0].toInt() * 60 + parts[1].toInt()
         }

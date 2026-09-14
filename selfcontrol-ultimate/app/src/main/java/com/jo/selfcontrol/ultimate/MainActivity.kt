@@ -45,6 +45,15 @@ class MainActivity : Activity() {
     private lateinit var deviceOwnerStatusText: TextView
     private lateinit var periodBlocksContainer: LinearLayout
     private lateinit var installBlocksContainer: LinearLayout
+    private lateinit var partialAccessContainer: LinearLayout
+
+    private lateinit var zoomCanvas: com.jo.selfcontrol.ultimate.ui.ZoomableCanvasView
+    private lateinit var securityCircle: com.jo.selfcontrol.ultimate.ui.FeatureCircleView
+    private lateinit var appLimitsCircle: com.jo.selfcontrol.ultimate.ui.FeatureCircleView
+    private lateinit var curfewCircle: com.jo.selfcontrol.ultimate.ui.FeatureCircleView
+    private lateinit var installBlocklistCircle: com.jo.selfcontrol.ultimate.ui.FeatureCircleView
+    private lateinit var nuclearCircle: com.jo.selfcontrol.ultimate.ui.FeatureCircleView
+    private lateinit var partialAccessCircle: com.jo.selfcontrol.ultimate.ui.FeatureCircleView
 
     private val selectedNuclearApps = mutableSetOf<String>()
     private var selectedDurationMs = 30 * 60 * 1000L
@@ -57,12 +66,14 @@ class MainActivity : Activity() {
             refreshNuclearStatus()
             refreshPeriodBlocksUI()
             refreshInstallBlocksUI()
+            refreshPartialAccessUI()
             handler.postDelayed(this, 1000)
         }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        requestWindowFeature(android.view.Window.FEATURE_NO_TITLE)
         Log.i(TAG, "MainActivity started")
         LimitService.start(this)
         setContentView(buildUI())
@@ -72,6 +83,16 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         refreshPermissions()
+        if (::zoomCanvas.isInitialized) {
+            zoomCanvas.startFloatingAnimation()
+        }
+    }
+
+    override fun onPause() {
+        super.onPause()
+        if (::zoomCanvas.isInitialized) {
+            zoomCanvas.stopFloatingAnimation(animateToZero = false)
+        }
     }
 
     override fun onDestroy() {
@@ -79,228 +100,274 @@ class MainActivity : Activity() {
         handler.removeCallbacks(refreshRunnable)
     }
 
+    override fun onBackPressed() {
+        if (::zoomCanvas.isInitialized && zoomCanvas.zoomedCircle != null) {
+            zoomCanvas.zoomOut()
+        } else {
+            super.onBackPressed()
+        }
+    }
+
     // ──────────────────────────────────────
     //  Build UI
     // ──────────────────────────────────────
 
     private fun buildUI(): View {
-        val root = ScrollView(this).apply {
-            setBackgroundColor(Color.parseColor("#121212"))
-            isFillViewport = true
+        zoomCanvas = com.jo.selfcontrol.ultimate.ui.ZoomableCanvasView(this)
+
+        val createContainer = { -> LinearLayout(this).apply { orientation = LinearLayout.VERTICAL } }
+
+        // --- Permissions (hidden, outside circles) ---
+        permissionsContainer = createContainer()
+        permissionsContainer.visibility = View.GONE
+        zoomCanvas.addView(permissionsContainer)
+
+        // =============================================
+        //  CENTRAL HUB: Delay & Limits (the big one)
+        // =============================================
+        securityCircle = com.jo.selfcontrol.ultimate.ui.FeatureCircleView(this).apply {
+            setFeatureTitle("Delay & Limits")
+            setSummaryText("Protection active")
+            onClickListener = { zoomCanvas.zoomInto(this) }
         }
+        delayContainer = createContainer()
+        securityCircle.addContent(sectionTitleWithHelp("Security & Delay", HELP_DELAY))
+        securityCircle.addContent(delayContainer)
 
-        val mainLayout = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(16), dp(16), dp(16), dp(32))
+        // =============================================
+        //  SATELLITE 1: App Limits (top-left)
+        // =============================================
+        appLimitsCircle = com.jo.selfcontrol.ultimate.ui.FeatureCircleView(this).apply {
+            setFeatureTitle("App Limits")
+            setSummaryText("Manage apps")
+            onClickListener = { zoomCanvas.zoomInto(this) }
         }
-
-        // Header: title centered on the full width, help button pinned to the right
-        val headerRow = FrameLayout(this).apply {
-            setPadding(0, dp(8), 0, dp(4))
-        }
-        headerRow.addView(TextView(this).apply {
-            text = "Custos"
-            textSize = 26f
-            setTextColor(Color.WHITE)
-            typeface = Typeface.DEFAULT_BOLD
-            gravity = Gravity.CENTER
-            layoutParams = FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply { gravity = Gravity.CENTER }
-        })
-        headerRow.addView(Button(this).apply {
-            text = "❓"
-            textSize = 16f
-            setTextColor(Color.WHITE)
-            background = roundedBackground(Color.parseColor("#2A2A2A"))
-            setPadding(dp(12), dp(6), dp(12), dp(6))
-            setOnClickListener { showFullWalkthroughDialog() }
-            layoutParams = FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply { gravity = Gravity.END or Gravity.CENTER_VERTICAL }
-        })
-        mainLayout.addView(headerRow)
-
-        serviceStatusText = TextView(this).apply {
-            textSize = 13f
-            setTextColor(Color.parseColor("#888888"))
-            gravity = Gravity.CENTER
-            setPadding(0, 0, 0, dp(8))
-        }
-        mainLayout.addView(serviceStatusText)
-
-        deviceOwnerStatusText = TextView(this).apply {
-            textSize = 13f
-            gravity = Gravity.CENTER
-            setPadding(dp(12), dp(8), dp(12), dp(8))
-            setOnClickListener { showDeviceOwnerInfoDialog() }
-        }
-        mainLayout.addView(deviceOwnerStatusText)
-
-        // Permissions Section
-        permissionsContainer = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            visibility = View.GONE
-        }
-        mainLayout.addView(permissionsContainer)
-
-        // Settings Unlock Section
-        mainLayout.addView(sectionTitleWithHelp("Security & Delay", HELP_DELAY))
-        delayContainer = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-        }
-        mainLayout.addView(delayContainer)
-
-        mainLayout.addView(separator())
-
-        // App Limits Section
         val limitsHeader = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
         limitsHeader.addView(sectionTitleWithHelp("App Limits", HELP_APP_LIMITS))
-        
-        limitsHeader.addView(Button(this).apply {
+        limitsHeader.addView(android.widget.Button(this@MainActivity).apply {
             text = "+"
             textSize = 18f
             setTextColor(Color.WHITE)
-            background = roundedBackground(Color.parseColor("#BB86FC"))
+            background = roundedBackground(Color.BLACK)
             setOnClickListener { showAddAppDialog() }
-            layoutParams = LinearLayout.LayoutParams(dp(40), dp(40)).apply {
-                marginStart = dp(16)
-            }
+            layoutParams = LinearLayout.LayoutParams(dp(40), dp(40)).apply { marginStart = dp(16) }
         })
-        mainLayout.addView(limitsHeader)
+        appLimitsCircle.addContent(limitsHeader)
+        dashboardContainer = createContainer()
+        appLimitsCircle.addContent(dashboardContainer)
 
-        dashboardContainer = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
+        // =============================================
+        //  SATELLITE 2: Curfew (top-right)
+        // =============================================
+        curfewCircle = com.jo.selfcontrol.ultimate.ui.FeatureCircleView(this).apply {
+            setFeatureTitle("Curfew")
+            setSummaryText("Sleep hours")
+            onClickListener = { zoomCanvas.zoomInto(this) }
         }
-        mainLayout.addView(dashboardContainer)
-
-        mainLayout.addView(separator())
-
-        mainLayout.addView(sectionTitleWithHelp("Curfew", HELP_CURFEW))
-        mainLayout.addView(TextView(this).apply {
-            text = "Block selected apps during sleeping hours. Curfew wins over remaining daily time."
-            textSize = 13f
-            setTextColor(Color.parseColor("#AAAAAA"))
-            setPadding(dp(4), 0, dp(4), dp(8))
-        })
         val curfewHeader = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
-        curfewHeader.addView(Button(this).apply {
+        curfewHeader.addView(android.widget.Button(this@MainActivity).apply {
             text = "+ Add curfew rule"
             setTextColor(Color.WHITE)
-            background = roundedBackground(Color.parseColor("#333333"))
+            background = roundedBackground(Color.BLACK)
             setOnClickListener { showAddCurfewRuleDialog() }
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         })
-        mainLayout.addView(curfewHeader)
-        periodBlocksContainer = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-        }
-        mainLayout.addView(periodBlocksContainer)
-
-        mainLayout.addView(separator())
-
-        // Install Blocklist Section
-        mainLayout.addView(sectionTitleWithHelp("Install Blocklist", HELP_INSTALL_BLOCK))
-        mainLayout.addView(TextView(this).apply {
-            text = "Named groups of packages that must never run on this device. Any listed app " +
-                "is hidden the moment it appears — including apps preinstalled with the ROM."
+        curfewCircle.addContent(sectionTitleWithHelp("Curfew", HELP_CURFEW))
+        curfewCircle.addContent(TextView(this).apply {
+            text = "Block selected apps during sleeping hours."
             textSize = 13f
-            setTextColor(Color.parseColor("#AAAAAA"))
+            setTextColor(Color.BLACK)
             setPadding(dp(4), 0, dp(4), dp(8))
         })
+        curfewCircle.addContent(curfewHeader)
+        periodBlocksContainer = createContainer()
+        curfewCircle.addContent(periodBlocksContainer)
+
+        // =============================================
+        //  SATELLITE 3: Install Blocklist (bottom-left)
+        // =============================================
+        installBlocklistCircle = com.jo.selfcontrol.ultimate.ui.FeatureCircleView(this).apply {
+            setFeatureTitle("Blocklist")
+            setSummaryText("Install rules")
+            onClickListener = { zoomCanvas.zoomInto(this) }
+        }
         val installHeader = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
-        installHeader.addView(Button(this).apply {
+        installHeader.addView(android.widget.Button(this@MainActivity).apply {
             text = "+ New group"
             setTextColor(Color.WHITE)
-            background = roundedBackground(Color.parseColor("#333333"))
+            background = roundedBackground(Color.BLACK)
             setOnClickListener { showNewInstallGroupDialog() }
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
-                marginEnd = dp(4)
-            }
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = dp(4) }
         })
-        installHeader.addView(Button(this).apply {
+        installHeader.addView(android.widget.Button(this@MainActivity).apply {
             text = "Import CSV"
             setTextColor(Color.WHITE)
-            background = roundedBackground(Color.parseColor("#333333"))
+            background = roundedBackground(Color.BLACK)
             setOnClickListener { launchCsvPicker() }
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
-                marginStart = dp(4)
-            }
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginStart = dp(4) }
         })
-        mainLayout.addView(installHeader)
-        installBlocksContainer = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
+        installBlocklistCircle.addContent(sectionTitleWithHelp("Install Blocklist", HELP_INSTALL_BLOCK))
+        installBlocklistCircle.addContent(installHeader)
+        installBlocksContainer = createContainer()
+        installBlocklistCircle.addContent(installBlocksContainer)
+
+        // =============================================
+        //  SATELLITE 4: Nuclear Mode (bottom-right)
+        // =============================================
+        nuclearCircle = com.jo.selfcontrol.ultimate.ui.FeatureCircleView(this).apply {
+            setFeatureTitle("Nuclear")
+            setSummaryText("Total block")
+            onClickListener = { zoomCanvas.zoomInto(this) }
         }
-        mainLayout.addView(installBlocksContainer)
-
-        mainLayout.addView(separator())
-
-        // Nuclear Mode Section
-        mainLayout.addView(sectionTitleWithHelp("Nuclear Mode", HELP_NUCLEAR))
-
-        nuclearStatusContainer = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            visibility = View.GONE
-        }
+        nuclearCircle.addContent(sectionTitleWithHelp("Nuclear Mode", HELP_NUCLEAR))
+        nuclearStatusContainer = createContainer().apply { visibility = View.GONE }
         nuclearCountdownText = TextView(this).apply {
             textSize = 22f
-            setTextColor(Color.parseColor("#FF5252"))
-            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.RED)
+            typeface = android.graphics.Typeface.DEFAULT_BOLD
             gravity = Gravity.CENTER
             setPadding(0, dp(8), 0, dp(8))
         }
         nuclearStatusContainer.addView(nuclearCountdownText)
         nuclearBlockedListText = TextView(this).apply {
             textSize = 13f
-            setTextColor(Color.parseColor("#CCCCCC"))
+            setTextColor(Color.BLACK)
             setPadding(dp(8), 0, dp(8), dp(12))
         }
         nuclearStatusContainer.addView(nuclearBlockedListText)
-        mainLayout.addView(nuclearStatusContainer)
+        nuclearCircle.addContent(nuclearStatusContainer)
 
-        nuclearSetupContainer = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            visibility = View.VISIBLE
-        }
-        val nuclearButton = Button(this).apply {
+        nuclearSetupContainer = createContainer().apply { visibility = View.VISIBLE }
+        nuclearSetupContainer.addView(android.widget.Button(this@MainActivity).apply {
             text = "Activate Nuclear Mode"
             textSize = 16f
             setTextColor(Color.WHITE)
-            background = roundedBackground(Color.parseColor("#D32F2F"))
+            background = roundedBackground(Color.RED)
             setPadding(dp(16), dp(12), dp(16), dp(12))
             setOnClickListener { startNuclearActivationFlow() }
-        }
-        nuclearSetupContainer.addView(nuclearButton, LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
-        ).apply { topMargin = dp(8) })
-
-        val managePresetsButton = Button(this).apply {
+        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8) })
+        nuclearSetupContainer.addView(android.widget.Button(this@MainActivity).apply {
             text = "Manage Presets"
             textSize = 14f
             setTextColor(Color.WHITE)
-            background = roundedBackground(Color.parseColor("#424242"))
+            background = roundedBackground(Color.BLACK)
             setPadding(dp(16), dp(10), dp(16), dp(10))
             setOnClickListener { showManagePresetsDialog() }
+        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8) })
+        nuclearCircle.addContent(nuclearSetupContainer)
+
+        // =============================================
+        //  SATELLITE 5: Partial Access
+        // =============================================
+        partialAccessCircle = com.jo.selfcontrol.ultimate.ui.FeatureCircleView(this).apply {
+            setFeatureTitle("Partial Access")
+            setSummaryText("In-app channels")
+            onClickListener = { zoomCanvas.zoomInto(this) }
         }
-        nuclearSetupContainer.addView(managePresetsButton, LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
-        ).apply { topMargin = dp(8) })
+        val partialAccessHeader = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        partialAccessHeader.addView(sectionTitleWithHelp("Partial Access", HELP_PARTIAL_ACCESS))
+        partialAccessHeader.addView(android.widget.Button(this@MainActivity).apply {
+            text = "+"
+            textSize = 18f
+            setTextColor(Color.WHITE)
+            background = roundedBackground(Color.BLACK)
+            setOnClickListener { startScreenRuleLearning() }
+            layoutParams = LinearLayout.LayoutParams(dp(40), dp(40)).apply { marginStart = dp(16) }
+        })
+        partialAccessCircle.addContent(partialAccessHeader)
+        partialAccessContainer = createContainer()
+        partialAccessCircle.addContent(partialAccessContainer)
 
-        mainLayout.addView(nuclearSetupContainer)
+        // =============================================
+        //  LAYOUT: Central hub + 5 satellites (Pentagon)
+        //  Position relative to screen size
+        // =============================================
+        val dm = resources.displayMetrics
+        val screenW = dm.widthPixels
+        val screenH = dm.heightPixels
 
-        root.addView(mainLayout)
-        return root
+        val hubSize = (screenW * 0.38f).toInt()   
+        val satSize = (screenW * 0.24f).toInt()    
+
+        val hubCenterX = screenW / 2f
+        val hubCenterY = screenH / 2f - dp(30)
+        
+        val hubX = (hubCenterX - hubSize / 2f).toInt()
+        val hubY = (hubCenterY - hubSize / 2f).toInt()
+
+        // Distance from hub center to satellite center
+        val distance = (hubSize / 2f) + (satSize / 2f) + dp(15)
+
+        // Calculate 5 points of a pentagon. Angles: 270 (top), 342, 54, 126, 198
+        // Using standard trig: x = cx + dist * cos(a), y = cy + dist * sin(a)
+        fun calcX(angleDeg: Float): Int = (hubCenterX + distance * Math.cos(Math.toRadians(angleDeg.toDouble()))).toInt() - satSize / 2
+        fun calcY(angleDeg: Float): Int = (hubCenterY + distance * Math.sin(Math.toRadians(angleDeg.toDouble()))).toInt() - satSize / 2
+
+        val sat1X = calcX(270f)
+        val sat1Y = calcY(270f)
+        val sat2X = calcX(342f)
+        val sat2Y = calcY(342f)
+        val sat3X = calcX(54f)
+        val sat3Y = calcY(54f)
+        val sat4X = calcX(126f)
+        val sat4Y = calcY(126f)
+        val sat5X = calcX(198f)
+        val sat5Y = calcY(198f)
+
+        // Add hub FIRST (it's circles[0] = the connection hub)
+        zoomCanvas.addView(securityCircle, FrameLayout.LayoutParams(hubSize, hubSize).apply {
+            leftMargin = hubX; topMargin = hubY
+        })
+        zoomCanvas.addView(appLimitsCircle, FrameLayout.LayoutParams(satSize, satSize).apply {
+            leftMargin = sat1X; topMargin = sat1Y
+        })
+        zoomCanvas.addView(curfewCircle, FrameLayout.LayoutParams(satSize, satSize).apply {
+            leftMargin = sat2X; topMargin = sat2Y
+        })
+        zoomCanvas.addView(installBlocklistCircle, FrameLayout.LayoutParams(satSize, satSize).apply {
+            leftMargin = sat3X; topMargin = sat3Y
+        })
+        zoomCanvas.addView(nuclearCircle, FrameLayout.LayoutParams(satSize, satSize).apply {
+            leftMargin = sat4X; topMargin = sat4Y
+        })
+        zoomCanvas.addView(partialAccessCircle, FrameLayout.LayoutParams(satSize, satSize).apply {
+            leftMargin = sat5X; topMargin = sat5Y
+        })
+
+        val circles = listOf(securityCircle, appLimitsCircle, curfewCircle, installBlocklistCircle, nuclearCircle, partialAccessCircle)
+
+        // Hidden status texts (still needed by refresh methods)
+        serviceStatusText = TextView(this).apply {
+            textSize = 13f
+            setTextColor(Color.parseColor("#888888"))
+            gravity = Gravity.CENTER
+            visibility = View.GONE
+        }
+        deviceOwnerStatusText = TextView(this).apply {
+            textSize = 13f
+            gravity = Gravity.CENTER
+            visibility = View.GONE
+            setOnClickListener { showDeviceOwnerInfoDialog() }
+        }
+        zoomCanvas.addView(serviceStatusText)
+        zoomCanvas.addView(deviceOwnerStatusText)
+
+        // Trigger the sequential entry animation after layout
+        zoomCanvas.post { zoomCanvas.startEntryAnimation() }
+
+        return zoomCanvas
     }
 
     // ──────────────────────────────────────
@@ -382,6 +449,20 @@ class MainActivity : Activity() {
         delayContainer.removeAllViews()
         val delayState = DelayManager.loadState(this)
         val effectiveDelay = DelayManager.getCurrentEffectiveDelaySeconds(this)
+        val now = System.currentTimeMillis()
+
+        if (delayState.unlockSettingsUnlockTime > 0) {
+            if (now >= delayState.unlockSettingsUnlockTime) {
+                securityCircle.setSummaryText("🔓 Unlocked", Color.parseColor("#4CAF50"))
+            } else {
+                val remaining = ((delayState.unlockSettingsUnlockTime - now) / 1000).toInt().coerceAtLeast(0)
+                securityCircle.setSummaryText("Unlock: ${formatShortDuration(remaining)}", Color.parseColor("#FF9800"))
+            }
+        } else if (effectiveDelay > 0) {
+            securityCircle.setSummaryText("Delay: ${formatShortDuration(effectiveDelay)}")
+        } else {
+            securityCircle.setSummaryText("No delay")
+        }
         
         // Delay Config
         val delayText = TextView(this).apply {
@@ -421,14 +502,14 @@ class MainActivity : Activity() {
                 delayContainer.addView(LinearLayout(this).apply {
                     orientation = LinearLayout.VERTICAL
                     setPadding(dp(8), dp(8), dp(8), dp(8))
-                    background = roundedBackground(Color.parseColor("#222222"))
+                    background = roundedBackground(Color.WHITE)
                     layoutParams = LinearLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT,
                         ViewGroup.LayoutParams.WRAP_CONTENT
                     ).apply { bottomMargin = dp(8) }
                     addView(TextView(this@MainActivity).apply {
                         text = "$days | $start -> $end | ${formatTime(rule.delaySeconds)}"
-                        setTextColor(Color.WHITE)
+                        setTextColor(Color.BLACK)
                     })
                     addView(Button(this@MainActivity).apply {
                         text = "Delete delay rule"
@@ -449,7 +530,7 @@ class MainActivity : Activity() {
             if (pending.isNotEmpty()) {
                 delayContainer.addView(TextView(this).apply {
                     text = "Pending config changes"
-                    setTextColor(Color.parseColor("#FFCA28"))
+                    setTextColor(Color.BLACK)
                     textSize = 14f
                     setPadding(0, dp(16), 0, dp(8))
                 })
@@ -458,7 +539,7 @@ class MainActivity : Activity() {
                     delayContainer.addView(LinearLayout(this).apply {
                         orientation = LinearLayout.VERTICAL
                         setPadding(dp(12), dp(12), dp(12), dp(12))
-                        background = roundedBackground(Color.parseColor("#1A1A2E"))
+                        background = roundedBackground(Color.WHITE)
                         layoutParams = LinearLayout.LayoutParams(
                             ViewGroup.LayoutParams.MATCH_PARENT,
                             ViewGroup.LayoutParams.WRAP_CONTENT
@@ -466,7 +547,7 @@ class MainActivity : Activity() {
 
                         addView(TextView(this@MainActivity).apply {
                             text = "📝 Pending Change — ${formatTime(remaining)}"
-                            setTextColor(Color.parseColor("#FFCA28"))
+                            setTextColor(Color.BLACK)
                             textSize = 14f
                             typeface = Typeface.DEFAULT_BOLD
                         })
@@ -479,14 +560,14 @@ class MainActivity : Activity() {
                             if (diffLines.isNotEmpty()) {
                                 addView(TextView(this@MainActivity).apply {
                                     text = diffLines.joinToString("\n")
-                                    setTextColor(Color.parseColor("#DDDDDD"))
+                                    setTextColor(Color.BLACK)
                                     textSize = 13f
                                     setPadding(0, dp(6), 0, dp(6))
                                 })
                             } else {
                                 addView(TextView(this@MainActivity).apply {
                                     text = update.description
-                                    setTextColor(Color.WHITE)
+                                    setTextColor(Color.BLACK)
                                     textSize = 13f
                                     setPadding(0, dp(4), 0, dp(4))
                                 })
@@ -494,7 +575,7 @@ class MainActivity : Activity() {
                         } else {
                             addView(TextView(this@MainActivity).apply {
                                 text = update.description
-                                setTextColor(Color.WHITE)
+                                setTextColor(Color.BLACK)
                                 textSize = 13f
                                 setPadding(0, dp(4), 0, dp(4))
                             })
@@ -539,7 +620,6 @@ class MainActivity : Activity() {
         }
 
         // Settings Unlock UI
-        val now = System.currentTimeMillis()
         if (delayState.unlockSettingsUnlockTime > 0) {
             if (now >= delayState.unlockSettingsUnlockTime) {
                 // Unlocked!
@@ -866,7 +946,8 @@ class MainActivity : Activity() {
                     allowedHoursEnd = existingLimit?.allowedHoursEnd ?: 24 * 60,
                     allDay = existingLimit?.allDay ?: true,
                     session = session,
-                    protectionDelaySec = protectionDelaySec
+                    protectionDelaySec = protectionDelaySec,
+                    channelBlocks = existingLimit?.channelBlocks ?: emptyList()
                 ))
                 val newConfig = ConfigManager.Config(newLimits, config.periodBlocks, config.installBlocks)
                 saveConfigWithDelay(newConfig)
@@ -948,6 +1029,7 @@ class MainActivity : Activity() {
         periodBlocksContainer.removeAllViews()
         val cfg = ConfigManager.loadConfig(this)
         if (cfg.periodBlocks.isEmpty()) {
+            curfewCircle.setSummaryText("No curfew")
             periodBlocksContainer.addView(TextView(this).apply {
                 text = "No curfew rules."
                 textSize = 14f
@@ -956,6 +1038,27 @@ class MainActivity : Activity() {
             })
             return
         }
+
+        val cal = Calendar.getInstance()
+        val dayOfWeek = cal.get(Calendar.DAY_OF_WEEK) - 1
+        val nowMin = cal.get(Calendar.HOUR_OF_DAY) * 60 + cal.get(Calendar.MINUTE)
+        val isNowActive = cfg.periodBlocks.any { rule ->
+            dayOfWeek in rule.allowedDays && ConfigManager.isInBlockedWindow(nowMin, rule.blockedStartMinutes, rule.blockedEndMinutes)
+        }
+
+        if (isNowActive) {
+            curfewCircle.setSummaryText("Active now", Color.parseColor("#E53935"))
+        } else {
+            val r = cfg.periodBlocks[0]
+            val start = "%02d:%02d".format(r.blockedStartMinutes / 60, r.blockedStartMinutes % 60)
+            val end = "%02d:%02d".format(r.blockedEndMinutes / 60, r.blockedEndMinutes % 60)
+            if (cfg.periodBlocks.size == 1) {
+                curfewCircle.setSummaryText("$start - $end")
+            } else {
+                curfewCircle.setSummaryText("${cfg.periodBlocks.size} rules · $start")
+            }
+        }
+
         cfg.periodBlocks.forEachIndexed { index, rule ->
             periodBlocksContainer.addView(buildPeriodRuleRow(rule, index))
         }
@@ -978,7 +1081,7 @@ class MainActivity : Activity() {
         return LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(8), dp(8), dp(8), dp(8))
-            background = roundedBackground(Color.parseColor("#222222"))
+            background = roundedBackground(Color.WHITE)
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
@@ -987,13 +1090,13 @@ class MainActivity : Activity() {
             addView(TextView(this@MainActivity).apply {
                 text = "$days\n$start -> $end\n$names\n$muteLabel"
                 textSize = 14f
-                setTextColor(Color.WHITE)
+                setTextColor(Color.BLACK)
             })
             rule.protectionDelaySec?.let { sec ->
                 addView(TextView(this@MainActivity).apply {
                     text = "🔒 Protected — ${formatLongDuration(sec)} to change"
                     textSize = 12f
-                    setTextColor(Color.parseColor("#FFB74D"))
+                    setTextColor(Color.BLACK)
                 })
             }
             val buttonRow = LinearLayout(this@MainActivity).apply {
@@ -1007,7 +1110,7 @@ class MainActivity : Activity() {
             buttonRow.addView(Button(this@MainActivity).apply {
                 text = "Edit"
                 setTextColor(Color.WHITE)
-                background = roundedBackground(Color.parseColor("#BB86FC"))
+                background = roundedBackground(Color.BLACK)
                 layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
                     marginEnd = dp(4)
                 }
@@ -1227,6 +1330,7 @@ class MainActivity : Activity() {
         installBlocksContainer.removeAllViews()
         val cfg = ConfigManager.loadConfig(this)
         if (cfg.installBlocks.isEmpty()) {
+            installBlocklistCircle.setSummaryText("0 rules")
             installBlocksContainer.addView(TextView(this).apply {
                 text = "No install-block group."
                 textSize = 14f
@@ -1234,6 +1338,13 @@ class MainActivity : Activity() {
                 setPadding(dp(8), dp(8), dp(8), dp(8))
             })
             return
+        }
+        val groupCount = cfg.installBlocks.size
+        val totalPkgs = cfg.installBlocks.sumOf { it.packages.size }
+        if (groupCount == 1) {
+            installBlocklistCircle.setSummaryText("$totalPkgs apps blocked")
+        } else {
+            installBlocklistCircle.setSummaryText("$groupCount grp · $totalPkgs apps")
         }
         val neutralised = InstallBlockManager.loadHiddenState(this)
         for (group in cfg.installBlocks) {
@@ -1249,7 +1360,7 @@ class MainActivity : Activity() {
         return LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(8), dp(8), dp(8), dp(8))
-            background = roundedBackground(Color.parseColor("#222222"))
+            background = roundedBackground(Color.WHITE)
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
@@ -1259,13 +1370,13 @@ class MainActivity : Activity() {
                 text = group.name
                 textSize = 15f
                 typeface = Typeface.DEFAULT_BOLD
-                setTextColor(Color.WHITE)
+                setTextColor(Color.BLACK)
                 setOnClickListener { showInstallGroupPackagesDialog(group, neutralised) }
             })
             addView(TextView(this@MainActivity).apply {
                 text = "${group.packages.size} package(s) listed — $activeCount currently neutralised"
                 textSize = 13f
-                setTextColor(Color.parseColor("#AAAAAA"))
+                setTextColor(Color.BLACK)
             })
             addView(TextView(this@MainActivity).apply {
                 text = if (group.protectionDelaySec != null) {
@@ -1275,8 +1386,8 @@ class MainActivity : Activity() {
                 }
                 textSize = 12f
                 setTextColor(
-                    if (group.protectionDelaySec != null) Color.parseColor("#FFB74D")
-                    else Color.parseColor("#888888")
+                    if (group.protectionDelaySec != null) Color.BLACK
+                    else Color.BLACK
                 )
             })
 
@@ -1291,7 +1402,7 @@ class MainActivity : Activity() {
                 addView(Button(this@MainActivity).apply {
                     text = "Apps"
                     setTextColor(Color.WHITE)
-                    background = roundedBackground(Color.parseColor("#BB86FC"))
+                    background = roundedBackground(Color.BLACK)
                     layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
                         .apply { marginEnd = dp(4) }
                     setOnClickListener { showEditInstallGroupAppsDialog(group) }
@@ -1299,7 +1410,7 @@ class MainActivity : Activity() {
                 addView(Button(this@MainActivity).apply {
                     text = "Timer"
                     setTextColor(Color.WHITE)
-                    background = roundedBackground(Color.parseColor("#333333"))
+                    background = roundedBackground(Color.BLACK)
                     layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
                         .apply { marginEnd = dp(4) }
                     setOnClickListener {
@@ -1668,7 +1779,9 @@ class MainActivity : Activity() {
             Color.parseColor(if (isDO) "#A5D6A7" else "#FFCC80")
         )
 
+        val blockedCount = limits.keys.count { it in blocked }
         if (limits.isEmpty()) {
+            appLimitsCircle.setSummaryText("No limits")
             dashboardContainer.removeAllViews()
             dashboardContainer.addView(TextView(this).apply {
                 text = "No limits configured."
@@ -1677,6 +1790,10 @@ class MainActivity : Activity() {
                 setPadding(dp(8), dp(12), dp(8), dp(12))
             })
             return
+        } else if (blockedCount > 0) {
+            appLimitsCircle.setSummaryText("${limits.size} apps · $blockedCount blocked", Color.parseColor("#E53935"))
+        } else {
+            appLimitsCircle.setSummaryText("${limits.size} apps")
         }
 
         // Rebuild the rows whenever the set of monitored packages changes. Comparing by
@@ -1759,7 +1876,7 @@ class MainActivity : Activity() {
             tag = pkg
             gravity = Gravity.CENTER_VERTICAL
             isClickable = true
-            background = roundedBackground(Color.parseColor("#222222"))
+            background = roundedBackground(Color.WHITE)
             setOnClickListener { showEditAppDialog(pkg) }
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
                 bottomMargin = dp(8)
@@ -1788,7 +1905,7 @@ class MainActivity : Activity() {
         nameRow.addView(TextView(this).apply {
             text = getAppName(pkg)
             textSize = 14f
-            setTextColor(Color.WHITE)
+            setTextColor(Color.BLACK)
             typeface = Typeface.DEFAULT_BOLD
             maxLines = 1
         })
@@ -1819,23 +1936,19 @@ class MainActivity : Activity() {
         infoCol.addView(TextView(this).apply {
             tag = "usage_$pkg"
             textSize = 12f
-            setTextColor(Color.parseColor("#AAAAAA"))
+            setTextColor(Color.BLACK)
         })
 
         infoCol.addView(TextView(this).apply {
             tag = "session_$pkg"
             textSize = 11f
-            setTextColor(Color.parseColor("#80CBC4"))
+            setTextColor(Color.BLACK)
             visibility = View.GONE
         })
 
         row.addView(infoCol)
         return row
     }
-
-    // ──────────────────────────────────────
-    //  Nuclear Mode
-    // ──────────────────────────────────────
 
     private fun refreshNuclearStatus() {
         val state = LimitService.getNuclearState()
@@ -1845,6 +1958,7 @@ class MainActivity : Activity() {
 
             val remaining = state.endTimestamp - System.currentTimeMillis()
             val remainSec = (remaining / 1000).toInt().coerceAtLeast(0)
+            nuclearCircle.setSummaryText(formatTime(remainSec), Color.parseColor("#E53935"))
             nuclearCountdownText.text = "Time Remaining: ${formatTime(remainSec)}"
 
             val appNames = state.blockedPackages.joinToString("\n") { "  • ${getAppName(it)}" }
@@ -1890,6 +2004,7 @@ class MainActivity : Activity() {
             }
             nuclearStatusContainer.addView(controls)
         } else {
+            nuclearCircle.setSummaryText("Inactive")
             nuclearStatusContainer.visibility = View.GONE
             nuclearSetupContainer.visibility = View.VISIBLE
         }
@@ -2200,6 +2315,20 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun formatShortDuration(seconds: Int): String {
+        if (seconds <= 0) return "0s"
+        val d = seconds / 86_400
+        val h = (seconds % 86_400) / 3600
+        val m = (seconds % 3600) / 60
+        val s = seconds % 60
+        return when {
+            d > 0 -> if (h > 0) "${d}d ${h}h" else "${d}d"
+            h > 0 -> if (m > 0) "${h}h ${m}m" else "${h}h"
+            m > 0 -> "${m}m"
+            else -> "${s}s"
+        }
+    }
+
     /**
      * Coarse, readable duration for protection timers, which run to weeks — [formatTime] would
      * render 30 days as "720h00m00s".
@@ -2488,6 +2617,20 @@ class MainActivity : Activity() {
         tip = "Use this when you really need to focus: exams, deep work, or when you just need a digital detox."
     )
 
+    private val HELP_PARTIAL_ACCESS = HelpContent(
+        title = "Partial Access",
+        emoji = "🎯",
+        summary = "Block specific pages or features inside apps without blocking the entire app.",
+        steps = listOf(
+            "Tap the + button to select an app you want to restrict.",
+            "The app will open with a red overlay 'Capture Mode'.",
+            "Navigate to the forbidden section (e.g. YouTube Shorts) and tap the red overlay.",
+            "It turns green. Now tap the button you want to be redirected to (e.g. Home tab).",
+            "The rule is saved. Whenever you open the forbidden page, you'll be redirected instantly."
+        ),
+        tip = "Perfect for blocking mindless scrolling feeds while keeping useful parts of the app."
+    )
+
     private fun showFeatureHelpDialog(help: HelpContent) {
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -2716,6 +2859,9 @@ class MainActivity : Activity() {
     private fun roundedBackground(color: Int): GradientDrawable {
         return GradientDrawable().apply {
             setColor(color)
+            if (color == Color.WHITE) {
+                setStroke((2f * resources.displayMetrics.density).toInt(), Color.BLACK)
+            }
             cornerRadius = 12f * resources.displayMetrics.density
         }
     }
@@ -3016,5 +3162,301 @@ class MainActivity : Activity() {
         }
         listView.adapter = adapter
         return listView
+    }
+
+    // ==========================================
+    //  PARTIAL ACCESS (SCREEN RULES)
+    // ==========================================
+    private fun refreshPartialAccessUI() {
+        if (!::partialAccessContainer.isInitialized) return
+        partialAccessContainer.removeAllViews()
+        val rules = ScreenRuleManager.load(this)
+        if (rules.isEmpty()) {
+            partialAccessCircle.setSummaryText("0 rules")
+            partialAccessContainer.addView(TextView(this).apply {
+                text = "No partial access rules configured."
+                setTextColor(Color.GRAY)
+                setPadding(dp(8), dp(8), dp(8), dp(8))
+            })
+            return
+        } else if (rules.size == 1) {
+            partialAccessCircle.setSummaryText(rules[0].name)
+        } else {
+            partialAccessCircle.setSummaryText("${rules.size} rules")
+        }
+
+        for (rule in rules) {
+            val label = try {
+                packageManager.getApplicationLabel(packageManager.getApplicationInfo(rule.packageName, 0)).toString()
+            } catch (_: Exception) {
+                rule.packageName
+            }
+            val card = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                background = roundedBackground(Color.parseColor("#F5F5F5"))
+                setPadding(dp(12), dp(10), dp(12), dp(10))
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { topMargin = dp(6) }
+
+                addView(TextView(this@MainActivity).apply {
+                    text = rule.name
+                    textSize = 15f
+                    setTextColor(Color.BLACK)
+                    typeface = Typeface.DEFAULT_BOLD
+                })
+                addView(TextView(this@MainActivity).apply {
+                    val health = "✓ ${rule.successes}   ✗ ${rule.failures}"
+                    text = "$label · ${rule.blockedIds.size} marker(s) · $health"
+                    textSize = 12f
+                    setTextColor(Color.parseColor("#666666"))
+                })
+
+                val pendingMs = ScreenRuleManager.pendingRemovalRemainingMs(this@MainActivity, rule.name)
+                addView(TextView(this@MainActivity).apply {
+                    text = if (ScreenRuleManager.PERMANENT_ON_THIS_FLAVOR) {
+                        "🔒 Permanent sur ce build (retrait ADB uniquement)"
+                    } else {
+                        "🛡️ Protection timer: ${protectionTimerLabel(rule.protectionDelaySec)}"
+                    }
+                    textSize = 12f
+                    setTextColor(if (ScreenRuleManager.PERMANENT_ON_THIS_FLAVOR) Color.parseColor("#7B1FA2") else Color.parseColor("#666666"))
+                    setPadding(0, dp(4), 0, 0)
+                })
+
+                if (!rule.blockedHours.isNullOrBlank()) {
+                    addView(TextView(this@MainActivity).apply {
+                        text = "⏰ Horaires actifs: ${rule.blockedHours}"
+                        textSize = 12f
+                        setTextColor(Color.parseColor("#666666"))
+                        setPadding(0, dp(2), 0, 0)
+                    })
+                }
+
+                when {
+                    ScreenRuleManager.PERMANENT_ON_THIS_FLAVOR -> {
+                        // Permanent on this build: no removal button via UI
+                    }
+                    pendingMs != null -> {
+                        addView(TextView(this@MainActivity).apply {
+                            text = "Retrait dans ${formatLongDuration((pendingMs / 1000).toInt())}"
+                            textSize = 12f
+                            setTextColor(Color.RED)
+                            setPadding(0, dp(6), 0, dp(4))
+                        })
+                        addView(Button(this@MainActivity).apply {
+                            text = "Cancel removal"
+                            setTextColor(Color.WHITE)
+                            background = roundedBackground(Color.BLACK)
+                            setOnClickListener {
+                                ScreenRuleManager.cancelRemoval(this@MainActivity, rule.name)
+                                refreshPartialAccessUI()
+                            }
+                        })
+                    }
+                    else -> {
+                        val actionsRow = LinearLayout(this@MainActivity).apply {
+                            orientation = LinearLayout.HORIZONTAL
+                            setPadding(0, dp(8), 0, 0)
+                        }
+                        actionsRow.addView(Button(this@MainActivity).apply {
+                            text = "Timer"
+                            textSize = 12f
+                            setTextColor(Color.WHITE)
+                            background = roundedBackground(Color.parseColor("#333333"))
+                            setOnClickListener {
+                                showProtectionTimerDialog(rule.protectionDelaySec) { picked ->
+                                    ScreenRuleManager.updateProtectionDelay(this@MainActivity, rule.name, picked)
+                                    refreshPartialAccessUI()
+                                }
+                            }
+                            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                                marginEnd = dp(8)
+                            }
+                        })
+                        actionsRow.addView(Button(this@MainActivity).apply {
+                            text = "Remove"
+                            textSize = 12f
+                            setTextColor(Color.WHITE)
+                            background = roundedBackground(Color.BLACK)
+                            setOnClickListener { onRemoveScreenRule(rule) }
+                            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                        })
+                        addView(actionsRow)
+                    }
+                }
+            }
+            partialAccessContainer.addView(card)
+        }
+    }
+
+    private fun onRemoveScreenRule(rule: ScreenRuleManager.ScreenRule) {
+        when (val outcome = ScreenRuleManager.requestRemoval(this, rule.name)) {
+            is ScreenRuleManager.RemovalOutcome.Permanent -> {
+                AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog)
+                    .setTitle("Permanent rule")
+                    .setMessage(
+                        "On this build a partial-access rule can no longer be removed from the " +
+                            "phone once created — only via adb from a PC. That is deliberate."
+                    )
+                    .setPositiveButton("Got it", null)
+                    .show()
+            }
+            is ScreenRuleManager.RemovalOutcome.Immediate ->
+                Toast.makeText(this, "Rule removed.", Toast.LENGTH_SHORT).show()
+            is ScreenRuleManager.RemovalOutcome.Deferred -> {
+                val scope = if (outcome.fromRuleTimer) "rule delay" else "general delay"
+                Toast.makeText(
+                    this,
+                    "Removal scheduled in ${formatLongDuration(outcome.seconds)} ($scope).",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+            is ScreenRuleManager.RemovalOutcome.AlreadyPending ->
+                Toast.makeText(
+                    this,
+                    "Removal already pending (${formatLongDuration((outcome.remainingMs / 1000).toInt())}).",
+                    Toast.LENGTH_LONG
+                ).show()
+            is ScreenRuleManager.RemovalOutcome.NotFound ->
+                Toast.makeText(this, "Rule not found.", Toast.LENGTH_SHORT).show()
+        }
+        refreshPartialAccessUI()
+    }
+
+    private fun startScreenRuleLearning() {
+        if (AppWatcherService.serviceInstance == null) {
+            Toast.makeText(
+                this,
+                "First enable Custos's accessibility service in Settings.",
+                Toast.LENGTH_LONG
+            ).show()
+            return
+        }
+        val apps = getInstalledLaunchableApps()
+        val selected = mutableSetOf<String>()
+        val listView = buildAppCheckListView(apps, selected)
+        val dialog = AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog)
+            .setTitle("Which app?")
+            .setView(listView)
+            .setPositiveButton("Next") { _, _ ->
+                val pkg = selected.firstOrNull()
+                if (pkg == null) {
+                    Toast.makeText(this, "Pick an app.", Toast.LENGTH_SHORT).show()
+                } else {
+                    askScreenRuleDetails(pkg, apps.firstOrNull { it.packageName == pkg }?.label ?: pkg)
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .create()
+        styleDialogForDarkTheme(dialog)
+        dialog.show()
+    }
+
+    private fun askScreenRuleDetails(pkg: String, label: String) {
+        val existingRules = ScreenRuleManager.load(this)
+        val existingForPkg = existingRules.filter { it.packageName == pkg }
+
+        // Find next unused rule index for this app
+        var ruleIndex = existingForPkg.size + 1
+        var defaultName = "$label — part $ruleIndex"
+        while (existingRules.any { it.name.equals(defaultName, ignoreCase = true) }) {
+            ruleIndex++
+            defaultName = "$label — part $ruleIndex"
+        }
+
+        val nameInput = EditText(this).apply {
+            setText(defaultName)
+            hint = "e.g. $label — Stories, $label — Actus..."
+            setTextColor(Color.BLACK)
+            selectAll()
+        }
+        val layout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), dp(8), dp(16), 0)
+            addView(TextView(this@MainActivity).apply {
+                text = "Rule name"
+                setTextColor(Color.parseColor("#666666"))
+                textSize = 12f
+            })
+            addView(nameInput)
+            addView(TextView(this@MainActivity).apply {
+                text = if (existingForPkg.isNotEmpty()) {
+                    "💡 You already have ${existingForPkg.size} rule(s) for $label. You can create multiple rules per app (e.g. to block different tabs or screens)."
+                } else {
+                    "💡 You can create multiple rules per app (e.g. to block different tabs or screens). Give each rule a distinct name."
+                }
+                setTextColor(Color.parseColor("#888888"))
+                textSize = 11f
+                setPadding(0, dp(4), 0, dp(6))
+            })
+        }
+
+        var pickedTimer: Int? = if (ScreenRuleManager.PERMANENT_ON_THIS_FLAVOR) null else 360 * 60
+
+        if (!ScreenRuleManager.PERMANENT_ON_THIS_FLAVOR) {
+            val timerRow = buildProtectionTimerRow(pickedTimer) { picked ->
+                pickedTimer = picked
+            }
+            layout.addView(timerRow)
+        } else {
+            layout.addView(TextView(this).apply {
+                text = "🔒 Permanent sur le flavor me — le retrait se fait uniquement par commande adb."
+                setTextColor(Color.parseColor("#D32F2F"))
+                textSize = 12f
+                setPadding(0, dp(12), 0, dp(4))
+            })
+        }
+
+        fun launchCapture(finalName: String, delaySec: Int) {
+            val svc = AppWatcherService.serviceInstance
+            if (svc == null) {
+                Toast.makeText(this@MainActivity, "Accessibility service unavailable.", Toast.LENGTH_LONG).show()
+                return
+            }
+            ScreenLearnSession.start(svc, pkg, finalName, delaySec)
+            packageManager.getLaunchIntentForPackage(pkg)?.let { startActivity(it) }
+        }
+
+        val dialog = AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog)
+            .setTitle("New rule")
+            .setView(layout)
+            .setPositiveButton("Start capture") { _, _ ->
+                val chosenName = nameInput.text.toString().trim().ifBlank { defaultName }
+                val delaySec = if (ScreenRuleManager.PERMANENT_ON_THIS_FLAVOR) 0
+                    else (pickedTimer ?: 0)
+
+                val collision = existingRules.firstOrNull { it.name.equals(chosenName, ignoreCase = true) }
+                if (collision != null) {
+                    var suffix = 2
+                    var autoUnique = "$chosenName ($suffix)"
+                    while (existingRules.any { it.name.equals(autoUnique, ignoreCase = true) }) {
+                        suffix++
+                        autoUnique = "$chosenName ($suffix)"
+                    }
+                    val conflictBuilder = AlertDialog.Builder(this@MainActivity, android.R.style.Theme_DeviceDefault_Dialog)
+                        .setTitle("Rule already exists")
+                        .setMessage("A rule named '$chosenName' already exists. Do you want to keep both rules?")
+                        .setPositiveButton("Keep both ($autoUnique)") { _, _ ->
+                            launchCapture(autoUnique, delaySec)
+                        }
+                        .setNeutralButton("Cancel", null)
+
+                    if (!ScreenRuleManager.PERMANENT_ON_THIS_FLAVOR) {
+                        conflictBuilder.setNegativeButton("Replace existing") { _, _ ->
+                            launchCapture(chosenName, delaySec)
+                        }
+                    }
+                    val conflictDialog = conflictBuilder.create()
+                    styleDialogForDarkTheme(conflictDialog)
+                    conflictDialog.show()
+                } else {
+                    launchCapture(chosenName, delaySec)
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .create()
+        styleDialogForDarkTheme(dialog)
+        dialog.show()
     }
 }

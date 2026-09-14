@@ -64,6 +64,15 @@
             android:name=".BlockedNotificationChoiceReceiver"
             android:exported="false" />
 
+        <receiver
+            android:name=".CommandReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.jo.selfcontrol.ultimate.ALLOW_INSTALL" />
+                <action android:name="com.jo.selfcontrol.ultimate.BLOCK_INSTALL" />
+            </intent-filter>
+        </receiver>
+
         <!-- Debug-only test automation hooks (no-op in release builds) -->
         <receiver
             android:name=".TestAutomationReceiver"

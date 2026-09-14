@@ -15,10 +15,14 @@ import android.util.Log
  * Emergency backdoor:
  *   adb shell am broadcast -a com.jo.selfcontrol.ultimate.REMOVE_OWNER
  *
- * Dev — temporarily allow APK installs (re-applied at next app start):
- *   adb shell am broadcast -a com.jo.selfcontrol.ultimate.ALLOW_INSTALL
+ * Open a time-boxed install window. Defaults to InstallWindowManager.DEFAULT_MINUTES; the window
+ * closes itself on the device's own clock, so adb dying in the meantime is a non-event:
+ *   adb shell am broadcast -p com.jo.selfcontrol.ultimate \
+ *     -a com.jo.selfcontrol.ultimate.ALLOW_INSTALL
+ *   adb shell am broadcast -p com.jo.selfcontrol.ultimate \
+ *     -a com.jo.selfcontrol.ultimate.ALLOW_INSTALL --ei minutes 30
  *
- * Dev — re-apply install restrictions immediately:
+ * Close the window early. A hardening, so it always applies immediately:
  *   adb shell am broadcast -a com.jo.selfcontrol.ultimate.BLOCK_INSTALL
  *
  * Recovery — force-unsuspend every package suspended by our DO admin.
@@ -42,9 +46,15 @@ class CommandReceiver : BroadcastReceiver() {
         when (intent.action) {
             "com.jo.selfcontrol.ultimate.STATUS" -> handleStatus(context)
             "com.jo.selfcontrol.ultimate.REMOVE_OWNER" -> handleRemoveOwner(context)
-            "com.jo.selfcontrol.ultimate.ALLOW_INSTALL" -> handleAllowInstall(context)
+            "com.jo.selfcontrol.ultimate.ALLOW_INSTALL" -> handleAllowInstall(context, intent)
             "com.jo.selfcontrol.ultimate.BLOCK_INSTALL" -> handleBlockInstall(context)
             "com.jo.selfcontrol.ultimate.UNSUSPEND_ALL" -> handleUnsuspendAll(context)
+            "com.jo.selfcontrol.ultimate.LEARN_SCREEN" -> handleLearnScreen(
+                intent.getStringExtra("pkg"), intent.getStringExtra("name")
+            )
+            "com.jo.selfcontrol.ultimate.REMOVE_SCREEN_RULE" ->
+                handleRemoveScreenRule(context, intent.getStringExtra("name"))
+            "com.jo.selfcontrol.ultimate.LIST_SCREEN_RULES" -> handleListScreenRules(context)
             "com.jo.selfcontrol.ultimate.EXPORT_LOG" -> handleExportLog(context)
             "com.jo.selfcontrol.ultimate.CLEAR_LOG" -> handleClearLog(context)
             "com.jo.selfcontrol.ultimate.IMPORT_INSTALL_BLOCKS" ->
@@ -88,19 +98,67 @@ class CommandReceiver : BroadcastReceiver() {
         EventLog.log(context, "CMD", "log cleared")
     }
 
+    /**
+     * Start a guided screen-learning session. Driven from adb for now; the same entry point is what a
+     * button in MainActivity would call, since everything after this happens on the floating overlay.
+     */
+    private fun handleLearnScreen(pkg: String?, name: String?) {
+        if (pkg.isNullOrBlank()) {
+            Log.e("SelfControl.Cmd", "LEARN_SCREEN: missing --es pkg")
+            return
+        }
+        val svc = AppWatcherService.serviceInstance
+        if (svc == null) {
+            Log.e("SelfControl.Cmd", "LEARN_SCREEN: accessibility service not connected")
+            return
+        }
+        Log.w("SelfControl.Cmd", "=== LEARN_SCREEN pkg=$pkg ===")
+        ScreenLearnSession.start(svc, pkg, name?.takeIf { it.isNotBlank() } ?: "Rule $pkg")
+    }
+
+    /**
+     * Developer escape hatch: remove a screen rule by name, bypassing the `me`-flavor permanence.
+     * Reachable only over adb, which is the whole point — the phone UI keeps rules permanent while a
+     * PC can still lift a bad one, without hand-editing the rules file.
+     *   adb shell am broadcast -p com.jo.selfcontrol.ultimate \
+     *     -a com.jo.selfcontrol.ultimate.REMOVE_SCREEN_RULE --es name "WhatsApp_Actus"
+     */
+    private fun handleRemoveScreenRule(context: Context, name: String?) {
+        if (name.isNullOrBlank()) {
+            Log.e("SelfControl.Cmd", "REMOVE_SCREEN_RULE: missing --es name")
+            return
+        }
+        val removed = ScreenRuleManager.removeImmediate(context, name)
+        Log.w("SelfControl.Cmd", "=== REMOVE_SCREEN_RULE '$name' → ${if (removed) "removed" else "not found"} ===")
+    }
+
+    /** List current screen rules to logcat, so the exact name for REMOVE_SCREEN_RULE is discoverable. */
+    private fun handleListScreenRules(context: Context) {
+        val rules = ScreenRuleManager.load(context)
+        Log.w("SelfControl.Cmd", "=== SCREEN RULES (${rules.size}) ===")
+        for (r in rules) {
+            Log.w(
+                "SelfControl.Cmd",
+                "  '${r.name}' pkg=${r.packageName} markers=${r.blockedIds.size} " +
+                    "ok=${r.successes} fail=${r.failures}"
+            )
+        }
+    }
+
     private fun handleUnsuspendAll(context: Context) {
         Log.w("SelfControl.Cmd", "=== UNSUSPEND_ALL (manual) ===")
         DeviceOwnerHelper.clearAllStuckSuspensions(context)
     }
 
-    private fun handleAllowInstall(context: Context) {
-        Log.w("SelfControl.Cmd", "=== ALLOW_INSTALL (dev) ===")
-        DeviceOwnerHelper.setInstallRestrictions(context, blocked = false)
+    private fun handleAllowInstall(context: Context, intent: Intent) {
+        val minutes = intent.getIntExtra("minutes", InstallWindowManager.DEFAULT_MINUTES)
+        Log.w("SelfControl.Cmd", "=== ALLOW_INSTALL ($minutes min requested) ===")
+        InstallWindowManager.open(context, minutes)
     }
 
     private fun handleBlockInstall(context: Context) {
-        Log.w("SelfControl.Cmd", "=== BLOCK_INSTALL (dev) ===")
-        DeviceOwnerHelper.setInstallRestrictions(context, blocked = true)
+        Log.w("SelfControl.Cmd", "=== BLOCK_INSTALL ===")
+        InstallWindowManager.close(context, "BLOCK_INSTALL")
     }
 
     private fun handleRemoveOwner(context: Context) {

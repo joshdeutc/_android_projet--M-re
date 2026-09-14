@@ -114,6 +114,22 @@ object DeviceOwnerHelper {
     }
 
     /**
+     * The user restrictions currently set by our admin, or null when they cannot be read.
+     *
+     * Callers must treat null as "unknown", not as "none set" — [InstallWindowManager] relies on
+     * that distinction to stay fail-closed when the query itself fails.
+     */
+    fun currentUserRestrictions(ctx: Context): android.os.Bundle? {
+        if (!isDeviceOwner(ctx)) return null
+        return try {
+            dpm(ctx).getUserRestrictions(admin(ctx))
+        } catch (e: Exception) {
+            Log.w(TAG, "getUserRestrictions failed: ${e.message}")
+            null
+        }
+    }
+
+    /**
      * Re-write the secure setting that lists enabled accessibility services so ours stays bound.
      * Called periodically from LimitService to undo any manual disable.
      */
