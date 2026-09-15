@@ -111,16 +111,16 @@ class MainActivity : Activity() {
             val label = intent.getStringExtra("extra_label") ?: getAppName(pkg)
             val nm = getSystemService(NotificationManager::class.java)
             nm?.cancel(200000 + pkg.hashCode())
-            if (::zoomCanvas.isInitialized && ::installBlocklistCircle.isInitialized) {
-                zoomCanvas.zoomInto(installBlocklistCircle)
+            if (::zoomCanvas.isInitialized) {
+                zoomCanvas.resetToOverview()
             }
             confirmRequestAddition(pkg, label)
         } else if (action == Intent.ACTION_SEND && intent.type == "text/plain") {
             val text = intent.getStringExtra(Intent.EXTRA_TEXT) ?: return
             val pkg = WhitelistManager.sanitizePackageName(text)
             if (pkg.isNotBlank()) {
-                if (::zoomCanvas.isInitialized && ::installBlocklistCircle.isInitialized) {
-                    zoomCanvas.zoomInto(installBlocklistCircle)
+                if (::zoomCanvas.isInitialized) {
+                    zoomCanvas.resetToOverview()
                 }
                 confirmRequestAddition(pkg, getAppName(pkg))
             }

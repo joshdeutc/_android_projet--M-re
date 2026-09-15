@@ -24,6 +24,10 @@ class ZoomableCanvasView @JvmOverloads constructor(
     var zoomedCircle: FeatureCircleView? = null
         private set
 
+    data class CircleBounds(val leftMargin: Int, val topMargin: Int, val width: Int, val height: Int)
+    private val initialBoundsMap = mutableMapOf<FeatureCircleView, CircleBounds>()
+    private var zoomAnimator: ValueAnimator? = null
+
     // Saved original layout params for zoom-out restore
     private var savedLeftMargin = 0
     private var savedTopMargin = 0
@@ -268,28 +272,65 @@ class ZoomableCanvasView @JvmOverloads constructor(
         stopFloatingAnimation(animateToZero = false)
     }
 
+    override fun addView(child: View?, index: Int, params: android.view.ViewGroup.LayoutParams?) {
+        super.addView(child, index, params)
+        if (child is FeatureCircleView && params is LayoutParams) {
+            initialBoundsMap[child] = CircleBounds(params.leftMargin, params.topMargin, params.width, params.height)
+        }
+    }
+
+    private fun getOrSaveInitialBounds(circle: FeatureCircleView): CircleBounds {
+        return initialBoundsMap.getOrPut(circle) {
+            val lp = circle.layoutParams as LayoutParams
+            CircleBounds(lp.leftMargin, lp.topMargin, lp.width, lp.height)
+        }
+    }
+
     override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
         return super.dispatchTouchEvent(ev)
     }
 
     fun zoomInto(circle: FeatureCircleView) {
         if (zoomedCircle == circle) return
+
+        // If another circle was previously zoomed, clean it up immediately
+        val prevCircle = zoomedCircle
+        if (prevCircle != null && prevCircle != circle) {
+            zoomAnimator?.cancel()
+            prevCircle.animate().cancel()
+            prevCircle.setZoomedState(false)
+            prevCircle.morphProgress = 0f
+            val prevBounds = getOrSaveInitialBounds(prevCircle)
+            val prevLp = prevCircle.layoutParams as LayoutParams
+            prevLp.leftMargin = prevBounds.leftMargin
+            prevLp.topMargin = prevBounds.topMargin
+            prevLp.width = prevBounds.width
+            prevLp.height = prevBounds.height
+            prevCircle.layoutParams = prevLp
+            prevCircle.alpha = 0f
+        }
+
         zoomedCircle = circle
         stopFloatingAnimation(animateToZero = true)
 
-        // Save original layout params
-        val lp = circle.layoutParams as FrameLayout.LayoutParams
-        savedLeftMargin = lp.leftMargin
-        savedTopMargin = lp.topMargin
-        savedWidth = lp.width
-        savedHeight = lp.height
+        val initialBounds = getOrSaveInitialBounds(circle)
+        savedLeftMargin = initialBounds.leftMargin
+        savedTopMargin = initialBounds.topMargin
+        savedWidth = initialBounds.width
+        savedHeight = initialBounds.height
 
         circle.bringToFront()
+        circle.animate().cancel()
+        circle.alpha = 1f
+        circle.scaleX = 1f
+        circle.scaleY = 1f
+        circle.visibility = View.VISIBLE
 
         // Fade out other circles
         for (i in 0 until childCount) {
             val child = getChildAt(i)
             if (child is FeatureCircleView && child != circle) {
+                child.animate().cancel()
                 child.animate().alpha(0f).setDuration(250).start()
             }
         }
@@ -301,7 +342,19 @@ class ZoomableCanvasView @JvmOverloads constructor(
             start()
         }
 
-        // Animate circle -> padded full screen rectangle
+        if (width == 0 || height == 0) {
+            post {
+                if (zoomedCircle == circle) {
+                    performZoomAnimation(circle)
+                }
+            }
+            return
+        }
+
+        performZoomAnimation(circle)
+    }
+
+    private fun performZoomAnimation(circle: FeatureCircleView) {
         val density = context.resources.displayMetrics.density
         val padX = (16 * density).toInt()
         val padTop = (48 * density).toInt() // Status bar padding
@@ -312,17 +365,18 @@ class ZoomableCanvasView @JvmOverloads constructor(
         val targetW = width - padX * 2
         val targetH = height - padTop - padBottom
 
-        val startX = savedLeftMargin
-        val startY = savedTopMargin
-        val startW = savedWidth
-        val startH = savedHeight
+        val startX = (circle.layoutParams as LayoutParams).leftMargin
+        val startY = (circle.layoutParams as LayoutParams).topMargin
+        val startW = circle.layoutParams.width
+        val startH = circle.layoutParams.height
 
-        ValueAnimator.ofFloat(0f, 1f).apply {
+        zoomAnimator?.cancel()
+        zoomAnimator = ValueAnimator.ofFloat(0f, 1f).apply {
             duration = 500
             interpolator = DecelerateInterpolator(2f)
             addUpdateListener { va ->
                 val t = va.animatedValue as Float
-                val newLp = circle.layoutParams as FrameLayout.LayoutParams
+                val newLp = circle.layoutParams as LayoutParams
                 newLp.leftMargin = (startX + (targetX - startX) * t).toInt()
                 newLp.topMargin = (startY + (targetY - startY) * t).toInt()
                 newLp.width = (startW + (targetW - startW) * t).toInt()
@@ -332,7 +386,9 @@ class ZoomableCanvasView @JvmOverloads constructor(
             }
             addListener(object : AnimatorListenerAdapter() {
                 override fun onAnimationEnd(animation: Animator) {
-                    circle.setZoomedState(true)
+                    if (zoomedCircle == circle) {
+                        circle.setZoomedState(true)
+                    }
                 }
             })
             start()
@@ -344,40 +400,56 @@ class ZoomableCanvasView @JvmOverloads constructor(
         circle.setZoomedState(false)
         zoomedCircle = null
 
-        val startX = (circle.layoutParams as FrameLayout.LayoutParams).leftMargin
-        val startY = (circle.layoutParams as FrameLayout.LayoutParams).topMargin
+        val startX = (circle.layoutParams as LayoutParams).leftMargin
+        val startY = (circle.layoutParams as LayoutParams).topMargin
         val startW = circle.layoutParams.width
         val startH = circle.layoutParams.height
 
-        // Step 1: Morph rectangle back to circle at original position
-        ValueAnimator.ofFloat(0f, 1f).apply {
+        val initialBounds = getOrSaveInitialBounds(circle)
+        val targetX = initialBounds.leftMargin
+        val targetY = initialBounds.topMargin
+        val targetW = initialBounds.width
+        val targetH = initialBounds.height
+
+        zoomAnimator?.cancel()
+        zoomAnimator = ValueAnimator.ofFloat(0f, 1f).apply {
             duration = 450
             interpolator = DecelerateInterpolator(2f)
             addUpdateListener { va ->
                 val t = va.animatedValue as Float
-                val newLp = circle.layoutParams as FrameLayout.LayoutParams
-                newLp.leftMargin = (startX + (savedLeftMargin - startX) * t).toInt()
-                newLp.topMargin = (startY + (savedTopMargin - startY) * t).toInt()
-                newLp.width = (startW + (savedWidth - startW) * t).toInt()
-                newLp.height = (startH + (savedHeight - startH) * t).toInt()
+                val newLp = circle.layoutParams as LayoutParams
+                newLp.leftMargin = (startX + (targetX - startX) * t).toInt()
+                newLp.topMargin = (startY + (targetY - startY) * t).toInt()
+                newLp.width = (startW + (targetW - startW) * t).toInt()
+                newLp.height = (startH + (targetH - startH) * t).toInt()
                 circle.layoutParams = newLp
                 circle.morphProgress = 1f - t
             }
             addListener(object : AnimatorListenerAdapter() {
                 override fun onAnimationEnd(animation: Animator) {
                     // Ensure exact original params are restored
-                    val lp = circle.layoutParams as FrameLayout.LayoutParams
-                    lp.leftMargin = savedLeftMargin
-                    lp.topMargin = savedTopMargin
-                    lp.width = savedWidth
-                    lp.height = savedHeight
+                    val lp = circle.layoutParams as LayoutParams
+                    lp.leftMargin = targetX
+                    lp.topMargin = targetY
+                    lp.width = targetW
+                    lp.height = targetH
                     circle.layoutParams = lp
                     circle.morphProgress = 0f
 
-                    // Step 2: Fade in other circles
+                    // Ensure ALL circles are clean and restored
                     for (i in 0 until childCount) {
                         val child = getChildAt(i)
                         if (child is FeatureCircleView) {
+                            child.animate().cancel()
+                            child.setZoomedState(false)
+                            child.morphProgress = 0f
+                            val bounds = getOrSaveInitialBounds(child)
+                            val clp = child.layoutParams as LayoutParams
+                            clp.leftMargin = bounds.leftMargin
+                            clp.topMargin = bounds.topMargin
+                            clp.width = bounds.width
+                            clp.height = bounds.height
+                            child.layoutParams = clp
                             child.animate().alpha(1f).setDuration(350).start()
                         }
                     }
@@ -403,5 +475,44 @@ class ZoomableCanvasView @JvmOverloads constructor(
             })
             start()
         }
+    }
+
+    /**
+     * Resets the canvas immediately to the main pentagon overview.
+     * Cancels all animations, collapses any zoomed circle, and ensures
+     * all circles are in their exact initial positions and visible.
+     */
+    fun resetToOverview() {
+        zoomAnimator?.cancel()
+        zoomAnimator = null
+        stopFloatingAnimation(animateToZero = false)
+
+        for (i in 0 until childCount) {
+            val child = getChildAt(i)
+            if (child is FeatureCircleView) {
+                child.animate().cancel()
+                child.setZoomedState(false)
+                child.morphProgress = 0f
+                val bounds = getOrSaveInitialBounds(child)
+                val lp = child.layoutParams as LayoutParams
+                lp.leftMargin = bounds.leftMargin
+                lp.topMargin = bounds.topMargin
+                lp.width = bounds.width
+                lp.height = bounds.height
+                child.layoutParams = lp
+                child.translationX = 0f
+                child.translationY = 0f
+                child.alpha = 1f
+                child.scaleX = 1f
+                child.scaleY = 1f
+                child.visibility = View.VISIBLE
+            }
+        }
+
+        zoomedCircle = null
+        animationStarted = true
+        lineDrawProgress = 1f
+        invalidate()
+        startFloatingAnimation()
     }
 }
