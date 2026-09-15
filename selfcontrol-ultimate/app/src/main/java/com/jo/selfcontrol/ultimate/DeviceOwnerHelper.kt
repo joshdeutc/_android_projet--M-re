@@ -73,10 +73,11 @@ object DeviceOwnerHelper {
         // 4. Force-enable our AccessibilityService (and ensure A11Y is enabled globally)
         enforceA11YReEnable(ctx)
 
-        // 5. Prevent all app installation (Play Store + sideloading) — ADB-only via ALLOW_INSTALL broadcast
+        // 5. App installations are allowed — unauthorized apps are quarantined by WhitelistManager
         runCatching {
-            d.addUserRestriction(a, UserManager.DISALLOW_INSTALL_APPS)
-            d.addUserRestriction(a, UserManager.DISALLOW_INSTALL_UNKNOWN_SOURCES)
+            d.clearUserRestriction(a, UserManager.DISALLOW_INSTALL_APPS)
+            d.clearUserRestriction(a, UserManager.DISALLOW_INSTALL_UNKNOWN_SOURCES)
+            Log.i(TAG, "Install restrictions cleared (delegated to WhitelistManager)")
         }
 
         // 6. Prevent factory reset (blocks Settings option and sometimes recovery)
@@ -93,24 +94,18 @@ object DeviceOwnerHelper {
     }
 
     /**
-     * Toggle the install-related user restrictions. Used by dev-only ALLOW_INSTALL / BLOCK_INSTALL
-     * broadcasts so we can push updated APKs without losing Device Owner status.
+     * Clear install-related user restrictions. With WhitelistManager active, app installations
+     * are permitted globally; unauthorized apps are quarantined on sight.
      */
     fun setInstallRestrictions(ctx: Context, blocked: Boolean) {
         if (!isDeviceOwner(ctx)) return
         val d = dpm(ctx)
         val a = admin(ctx)
         runCatching {
-            if (blocked) {
-                d.addUserRestriction(a, UserManager.DISALLOW_INSTALL_APPS)
-                d.addUserRestriction(a, UserManager.DISALLOW_INSTALL_UNKNOWN_SOURCES)
-                Log.i(TAG, "Install restrictions re-applied")
-            } else {
-                d.clearUserRestriction(a, UserManager.DISALLOW_INSTALL_APPS)
-                d.clearUserRestriction(a, UserManager.DISALLOW_INSTALL_UNKNOWN_SOURCES)
-                Log.i(TAG, "Install restrictions cleared")
-            }
-        }.onFailure { Log.e(TAG, "setInstallRestrictions($blocked) failed: ${it.message}") }
+            d.clearUserRestriction(a, UserManager.DISALLOW_INSTALL_APPS)
+            d.clearUserRestriction(a, UserManager.DISALLOW_INSTALL_UNKNOWN_SOURCES)
+            Log.i(TAG, "setInstallRestrictions: install restrictions remain cleared (Whitelist mode)")
+        }.onFailure { Log.e(TAG, "setInstallRestrictions failed: ${it.message}") }
     }
 
     /**
@@ -235,6 +230,38 @@ object DeviceOwnerHelper {
             dpm(ctx).setApplicationHidden(admin(ctx), pkg, hidden)
         }.getOrElse {
             Log.e(TAG, "hideApp($pkg, $hidden) failed: ${it.message}")
+            false
+        }
+    }
+
+    /**
+     * Silently uninstall a package. As Device Owner, this bypasses the system confirmation dialog
+     * and uninstalls the package in the background.
+     */
+    fun uninstallAppSilently(ctx: Context, pkg: String): Boolean {
+        if (!isDeviceOwner(ctx)) return false
+        return runCatching {
+            val packageInstaller = ctx.packageManager.packageInstaller
+            val intent = android.content.Intent(ctx, CommandReceiver::class.java).apply {
+                action = "com.jo.selfcontrol.ultimate.UNINSTALL_RESULT"
+                putExtra("pkg", pkg)
+            }
+            val flags = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+                android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_MUTABLE
+            } else {
+                android.app.PendingIntent.FLAG_UPDATE_CURRENT
+            }
+            val pendingIntent = android.app.PendingIntent.getBroadcast(
+                ctx,
+                pkg.hashCode(),
+                intent,
+                flags
+            )
+            packageInstaller.uninstall(pkg, pendingIntent.intentSender)
+            Log.w(TAG, "Triggered silent uninstallation for: $pkg")
+            true
+        }.getOrElse {
+            Log.e(TAG, "uninstallAppSilently($pkg) failed: ${it.message}", it)
             false
         }
     }

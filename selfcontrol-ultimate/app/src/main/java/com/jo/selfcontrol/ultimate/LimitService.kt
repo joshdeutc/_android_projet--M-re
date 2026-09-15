@@ -199,6 +199,7 @@ class LimitService : Service() {
         // Catch up on anything installed while the service was dead, and release groups whose
         // protection timer expired and were removed from the config in the meantime.
         InstallBlockManager.enforce(this, config)
+        WhitelistManager.enforce(this)
         registerPackageAddedReceiver()
 
         createNotificationChannel()
@@ -817,6 +818,7 @@ class LimitService : Service() {
             // Picks up newly added groups AND releases packages whose group's protection timer
             // ran out — this is the path a queued removal takes once DelayManager applies it.
             InstallBlockManager.enforce(this, newConfig)
+            WhitelistManager.enforce(this)
 
             updateNotification("Config reloaded — ${newPackages.size} app(s)")
             Log.i(TAG, "🔄 Config reloaded")
@@ -856,6 +858,7 @@ class LimitService : Service() {
             override fun onReceive(ctx: Context, intent: Intent) {
                 val pkg = intent.data?.schemeSpecificPart ?: return
                 InstallBlockManager.onPackageAdded(ctx, pkg)
+                WhitelistManager.onPackageAdded(ctx, pkg)
             }
         }
         val filter = android.content.IntentFilter().apply {

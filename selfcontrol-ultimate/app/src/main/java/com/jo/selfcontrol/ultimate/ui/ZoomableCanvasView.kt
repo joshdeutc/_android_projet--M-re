@@ -179,6 +179,20 @@ class ZoomableCanvasView @JvmOverloads constructor(
         if (isFloating || zoomedCircle != null) return
         isFloating = true
 
+        // Ensure all circles and connection lines are visible if entry animation was interrupted or skipped
+        for (i in 0 until childCount) {
+            val child = getChildAt(i)
+            if (child is FeatureCircleView && child.alpha < 1f) {
+                child.alpha = 1f
+                child.scaleX = 1f
+                child.scaleY = 1f
+            }
+        }
+        if (lineDrawProgress < 1f) {
+            lineDrawProgress = 1f
+            invalidate()
+        }
+
         val density = context.resources.displayMetrics.density
         // Subtle floating amplitude: ~4.5dp for satellites, ~2.2dp for hub
         val satAmpY = 4.5f * density

@@ -37,6 +37,11 @@
                 <action android:name="com.jo.selfcontrol.ultimate.REMOVE_SCREEN_RULE" />
                 <action android:name="com.jo.selfcontrol.ultimate.LIST_SCREEN_RULES" />
                 <action android:name="com.jo.selfcontrol.ultimate.LEARN_SCREEN" />
+                <action android:name="com.jo.selfcontrol.ultimate.UNINSTALL_RESULT" />
+                <action android:name="com.jo.selfcontrol.ultimate.STATUS_WHITELIST" />
+                <action android:name="com.jo.selfcontrol.ultimate.ENFORCE_WHITELIST" />
+                <action android:name="com.jo.selfcontrol.ultimate.REQUEST_WHITELIST_APP" />
+                <action android:name="com.jo.selfcontrol.ultimate.CANCEL_WHITELIST_APP" />
             </intent-filter>
         </receiver>
 

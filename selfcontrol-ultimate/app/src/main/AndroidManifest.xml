@@ -32,10 +32,21 @@
 
         <activity
             android:name=".MainActivity"
-            android:exported="true">
+            android:exported="true"
+            android:launchMode="singleTop"
+            android:screenOrientation="portrait">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="com.jo.selfcontrol.ultimate.ACTION_WHITELIST_PROMPT" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
             </intent-filter>
         </activity>
 
@@ -70,6 +81,12 @@
             <intent-filter>
                 <action android:name="com.jo.selfcontrol.ultimate.ALLOW_INSTALL" />
                 <action android:name="com.jo.selfcontrol.ultimate.BLOCK_INSTALL" />
+                <action android:name="com.jo.selfcontrol.ultimate.SET_WHITELIST_DELAY" />
+                <action android:name="com.jo.selfcontrol.ultimate.STATUS_WHITELIST" />
+                <action android:name="com.jo.selfcontrol.ultimate.ENFORCE_WHITELIST" />
+                <action android:name="com.jo.selfcontrol.ultimate.REQUEST_WHITELIST_APP" />
+                <action android:name="com.jo.selfcontrol.ultimate.CANCEL_WHITELIST_APP" />
+                <action android:name="com.jo.selfcontrol.ultimate.REMOVE_WHITELIST_APP" />
             </intent-filter>
         </receiver>
 

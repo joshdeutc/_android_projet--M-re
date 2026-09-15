@@ -1,4 +1,4 @@
-﻿# Guide des commandes ADB — Custos (SelfControl Ultimate)
+# Guide des commandes ADB — Custos (SelfControl Ultimate)
 
 Ce fichier regroupe toutes les commandes ADB pour mettre à jour l'application, déverrouiller l'installation d'applications, et administrer les règles (notamment sur le flavor `me` où certaines actions sont réservées à ADB).
 
@@ -47,24 +47,13 @@ $adb = if (Get-Command adb -ErrorAction SilentlyContinue) { "adb" } else { "$env
 
 ---
 
-## 2. Autoriser l'installation d'autres applications (Play Store / APK)
+## 2. Installation d'applications (Mode Whitelist Zero-Trust)
 
-Par défaut, l'installation d'applications est bloquée par le Device Owner (`DISALLOW_INSTALL_APPS`).
+Avec l'architecture Whitelist Zero-Trust, l'installation d'applications est **débloquée en permanence**. Vous pouvez installer des applications depuis le Google Play Store ou via APK.
+Dès qu'une application non-autorisée est installée, elle est **immédiatement masquée, suspendue et neutralisée** par Custos.
+Pour l'utiliser, il faut faire une demande d'ajout à la Whitelist avec le délai de quarantaine de 24h (dans l'interface de l'app ou via ADB ci-dessous).
 
-### Ouvrir une fenêtre temporaire d'installation (15 minutes par défaut) :
-```powershell
-& $adb shell am broadcast -a com.jo.selfcontrol.ultimate.ALLOW_INSTALL -n com.jo.selfcontrol.ultimate/.CommandReceiver
-```
-
-### Spécifier une durée personnalisée (en minutes, ex: 30 minutes) :
-```powershell
-& $adb shell am broadcast -a com.jo.selfcontrol.ultimate.ALLOW_INSTALL -n com.jo.selfcontrol.ultimate/.CommandReceiver --ei minutes 30
-```
-
-### Re-bloquer immédiatement les installations :
-```powershell
-& $adb shell am broadcast -a com.jo.selfcontrol.ultimate.BLOCK_INSTALL -n com.jo.selfcontrol.ultimate/.CommandReceiver
-```
+*(Les commandes `ALLOW_INSTALL` / `BLOCK_INSTALL` sont conservées pour la rétrocompatibilité mais ne sont plus nécessaires au quotidien).*
 
 ---
 
@@ -94,7 +83,58 @@ Remplacez `<NOM_DE_LA_REGLE>` par le nom exact (ex: `WhatsApp — blocked part`,
 
 ---
 
-## 4. Dépannage & Maintenance
+## 4. Mode Whitelist Stricte (Zero-Trust)
+
+Dans ce mode, toute application présente ou installée qui ne fait pas partie de la Whitelist est immédiatement masquée, suspendue et **désinstallée silencieusement par le Device Owner**.
+
+### Voir le statut de la Whitelist et les demandes en attente :
+```powershell
+& $adb shell am broadcast -a com.jo.selfcontrol.ultimate.STATUS_WHITELIST -n com.jo.selfcontrol.ultimate/.CommandReceiver
+```
+
+### Demander l'ajout d'une application (mise en quarantaine / délai incompressible) :
+Vous pouvez indiquer **soit le nom de package**, **soit directement le lien Play Store complet** (l'id du package est automatiquement extrait) :
+```powershell
+# Avec le nom de package :
+& $adb shell am broadcast -a com.jo.selfcontrol.ultimate.REQUEST_WHITELIST_APP -n com.jo.selfcontrol.ultimate/.CommandReceiver --es pkg "com.nom.package"
+
+# Ou avec le lien web Google Play Store complet :
+& $adb shell am broadcast -a com.jo.selfcontrol.ultimate.REQUEST_WHITELIST_APP -n com.jo.selfcontrol.ultimate/.CommandReceiver --es pkg "https://play.google.com/store/apps/details?id=com.nom.package"
+```
+Ou en spécifiant une durée personnalisée en heures (ex: 48 heures) :
+```powershell
+& $adb shell am broadcast -a com.jo.selfcontrol.ultimate.REQUEST_WHITELIST_APP -n com.jo.selfcontrol.ultimate/.CommandReceiver --es pkg "com.nom.package" --ei hours 48
+```
+
+### Configurer le délai de quarantaine Whitelist :
+Augmenter le délai est immédiat ; réduire le délai est différé par le délai actuel (règle anti-impulsion) :
+```powershell
+# Définir un délai dédié en heures (ex: 48h) :
+& $adb shell am broadcast -a com.jo.selfcontrol.ultimate.SET_WHITELIST_DELAY -n com.jo.selfcontrol.ultimate/.CommandReceiver --ei hours 48
+
+# Aligner le délai de quarantaine sur le délai général (Delay & Limits) :
+& $adb shell am broadcast -a com.jo.selfcontrol.ultimate.SET_WHITELIST_DELAY -n com.jo.selfcontrol.ultimate/.CommandReceiver --ez global true
+```
+
+### Annuler une demande en attente (action de durcissement, immédiate) :
+```powershell
+& $adb shell am broadcast -a com.jo.selfcontrol.ultimate.CANCEL_WHITELIST_APP -n com.jo.selfcontrol.ultimate/.CommandReceiver --es pkg "com.nom.package"
+```
+
+### Retirer une application de la Whitelist (action de durcissement immédiate) :
+L'application est immédiatement verrouillée, masquée et suspendue :
+```powershell
+& $adb shell am broadcast -a com.jo.selfcontrol.ultimate.REMOVE_WHITELIST_APP -n com.jo.selfcontrol.ultimate/.CommandReceiver --es pkg "com.nom.package"
+```
+
+### Forcer un balayage immédiat de vérification :
+```powershell
+& $adb shell am broadcast -a com.jo.selfcontrol.ultimate.ENFORCE_WHITELIST -n com.jo.selfcontrol.ultimate/.CommandReceiver
+```
+
+---
+
+## 5. Dépannage & Maintenance
 
 ### Débloquer toutes les applications suspendues (si une app reste grisée/bloquée à tort) :
 ```powershell

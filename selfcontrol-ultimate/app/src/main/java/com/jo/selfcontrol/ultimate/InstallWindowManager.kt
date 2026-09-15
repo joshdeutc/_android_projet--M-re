@@ -95,14 +95,11 @@ object InstallWindowManager {
         EventLog.log(ctx, "INSTALL_WINDOW", "opened ${minutes}min")
     }
 
-    /** Re-apply the restrictions, re-hide the installers, and forget the window. Idempotent. */
+    /** Re-hide any install blocklist items and forget the window. Idempotent. */
     fun close(ctx: Context, reason: String) {
         InstallWindowReceiver.cancel(ctx)
         clearState(ctx)
-        if (DeviceOwnerHelper.isDeviceOwner(ctx)) {
-            DeviceOwnerHelper.setInstallRestrictions(ctx, blocked = true)
-        }
-        // State is gone, so the same sweep now re-hides whatever the window had exempted.
+        // Note: We do NOT re-impose DISALLOW_INSTALL_APPS here; WhitelistManager isolates unapproved apps.
         syncInstallBlocks(ctx)
         Log.w(TAG, "Install window CLOSED ($reason)")
         EventLog.log(ctx, "INSTALL_WINDOW", "closed ($reason)")
@@ -120,42 +117,19 @@ object InstallWindowManager {
         }
     }
 
-    /** True while a trustworthy, unexpired window is open. */
-    fun isOpen(ctx: Context): Boolean {
-        val remaining = remainingMillis(ctx, System.currentTimeMillis()) ?: return false
-        return remaining > 0L
-    }
+    /** App installations are permitted under Whitelist architecture. */
+    fun isOpen(ctx: Context): Boolean = true
 
     // ──────────────────────────────────────
     //  Enforcement
     // ──────────────────────────────────────
 
     /**
-     * Fail-closed sweep, safe to call as often as the caller likes.
-     *
-     * Fast path first: while both restrictions are up there is nothing to decide, so the common
-     * case costs one binder read. Restrictions being *down* is the only case that needs a verdict,
-     * and it only survives while a trustworthy unexpired deadline backs it.
+     * Fail-closed sweep. Under Whitelist architecture, global install restrictions remain cleared,
+     * so this does not re-impose DISALLOW_INSTALL_APPS.
      */
     fun enforce(ctx: Context) {
-        val isDO = DeviceOwnerHelper.isDeviceOwner(ctx)
-        if (isDO && restrictionsUp(ctx)) {
-            // Nothing is open. Drop any leftover state so a later read cannot resurrect a window.
-            if (stateFile(ctx).exists()) clearState(ctx)
-            return
-        }
-
-        val remaining = remainingMillis(ctx, System.currentTimeMillis())
-        when {
-            remaining == null -> {
-                if (isDO && !restrictionsUp(ctx)) {
-                    close(ctx, "restrictions down with no valid window — fail-closed")
-                } else if (stateFile(ctx).exists()) {
-                    clearState(ctx)
-                }
-            }
-            remaining <= 0L -> close(ctx, "deadline reached")
-        }
+        // No-op: WhitelistManager handles isolating non-whitelisted apps on installation.
     }
 
     /**

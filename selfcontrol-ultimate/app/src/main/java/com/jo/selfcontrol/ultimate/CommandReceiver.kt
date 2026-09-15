@@ -59,6 +59,13 @@ class CommandReceiver : BroadcastReceiver() {
             "com.jo.selfcontrol.ultimate.CLEAR_LOG" -> handleClearLog(context)
             "com.jo.selfcontrol.ultimate.IMPORT_INSTALL_BLOCKS" ->
                 handleImportInstallBlocks(context, intent.getStringExtra("path"))
+            "com.jo.selfcontrol.ultimate.UNINSTALL_RESULT" -> handleUninstallResult(context, intent)
+            "com.jo.selfcontrol.ultimate.STATUS_WHITELIST" -> handleStatusWhitelist(context)
+            "com.jo.selfcontrol.ultimate.SET_WHITELIST_DELAY" -> handleSetWhitelistDelay(context, intent)
+            "com.jo.selfcontrol.ultimate.ENFORCE_WHITELIST" -> handleEnforceWhitelist(context)
+            "com.jo.selfcontrol.ultimate.REQUEST_WHITELIST_APP" -> handleRequestWhitelistApp(context, intent)
+            "com.jo.selfcontrol.ultimate.CANCEL_WHITELIST_APP" -> handleCancelWhitelistApp(context, intent)
+            "com.jo.selfcontrol.ultimate.REMOVE_WHITELIST_APP" -> handleRemoveWhitelistApp(context, intent)
         }
     }
 
@@ -148,6 +155,13 @@ class CommandReceiver : BroadcastReceiver() {
     private fun handleUnsuspendAll(context: Context) {
         Log.w("SelfControl.Cmd", "=== UNSUSPEND_ALL (manual) ===")
         DeviceOwnerHelper.clearAllStuckSuspensions(context)
+        val hidden = WhitelistManager.loadHiddenState(context)
+        for (pkg in hidden) {
+            DeviceOwnerHelper.hideApp(context, pkg, false)
+        }
+        WhitelistManager.saveHiddenState(context, emptySet())
+        WhitelistManager.enforce(context)
+        Log.w("SelfControl.Cmd", "=== UNSUSPEND_ALL completed: un-hid ${hidden.size} apps ===")
     }
 
     private fun handleAllowInstall(context: Context, intent: Intent) {
@@ -221,5 +235,83 @@ class CommandReceiver : BroadcastReceiver() {
             Log.i("SelfControl.Cmd", "NUCLEAR MODE ACTIVE until ${nuclear.endTimestamp}")
         }
         Log.i("SelfControl.Cmd", "======================")
+    }
+
+    private fun handleUninstallResult(context: Context, intent: Intent) {
+        val status = intent.getIntExtra(android.content.pm.PackageInstaller.EXTRA_STATUS, -999)
+        val msg = intent.getStringExtra(android.content.pm.PackageInstaller.EXTRA_STATUS_MESSAGE)
+        val pkg = intent.getStringExtra("pkg") ?: intent.getStringExtra(android.content.pm.PackageInstaller.EXTRA_PACKAGE_NAME) ?: "unknown"
+        Log.w("SelfControl.Cmd", "=== UNINSTALL_RESULT for $pkg: status=$status msg=$msg ===")
+        EventLog.log(context, "WHITELIST", "Uninstall result $pkg -> status=$status msg=$msg")
+    }
+
+    private fun handleStatusWhitelist(context: Context) {
+        val state = WhitelistManager.loadState(context)
+        val effectiveHours = WhitelistManager.getEffectiveQuarantineDelayHours(context)
+        Log.w("SelfControl.Cmd", "=== WHITELIST STATUS ===")
+        Log.w("SelfControl.Cmd", "  Enabled: ${state.enabled}")
+        Log.w("SelfControl.Cmd", "  Effective quarantine delay: ${effectiveHours}h (globalDelay=${state.useGlobalDelay}, dedicated=${state.quarantineDelayHours}h)")
+        if (state.pendingDelayExecuteAt > 0L) {
+            val remainSec = (state.pendingDelayExecuteAt - System.currentTimeMillis()) / 1000
+            Log.w("SelfControl.Cmd", "  Pending delay change: ${state.pendingDelayHours}h (global=${state.pendingDelayUseGlobal}) executes in ${remainSec}s")
+        }
+        Log.w("SelfControl.Cmd", "  Allowed apps count: ${state.allowedPackages.size}")
+        Log.w("SelfControl.Cmd", "  Pending requests: ${state.pendingRequests.size}")
+        for (req in state.pendingRequests) {
+            val remainMin = (req.availableAt - System.currentTimeMillis()) / 60000
+            Log.w("SelfControl.Cmd", "    - ${req.packageName} (unlocks in ${remainMin}m at ${java.util.Date(req.availableAt)})")
+        }
+    }
+
+    private fun handleSetWhitelistDelay(context: Context, intent: Intent) {
+        val hours = intent.getIntExtra("hours", -1)
+        val global = intent.getBooleanExtra("global", false)
+        if (!global && hours <= 0) {
+            Log.e("SelfControl.Cmd", "SET_WHITELIST_DELAY: specify --ei hours <hours> or --ez global true")
+            return
+        }
+        val res = WhitelistManager.setQuarantineDelay(context, if (hours > 0) hours else 24, global)
+        Log.w("SelfControl.Cmd", "=== SET_WHITELIST_DELAY: $res ===")
+    }
+
+    private fun handleEnforceWhitelist(context: Context) {
+        Log.w("SelfControl.Cmd", "=== ENFORCE_WHITELIST (manual) ===")
+        WhitelistManager.enforce(context)
+    }
+
+    private fun handleRequestWhitelistApp(context: Context, intent: Intent) {
+        val pkg = intent.getStringExtra("pkg")
+        if (pkg.isNullOrBlank()) {
+            Log.e("SelfControl.Cmd", "REQUEST_WHITELIST_APP: missing --es pkg")
+            return
+        }
+        val delaySec = if (intent.hasExtra("hours")) {
+            intent.getIntExtra("hours", 24) * 3600L
+        } else {
+            WhitelistManager.getEffectiveQuarantineDelaySeconds(context)
+        }
+        val ok = WhitelistManager.requestAppAddition(context, pkg, delaySec)
+        val hours = delaySec / 3600L
+        Log.w("SelfControl.Cmd", "=== REQUEST_WHITELIST_APP $pkg ($hours h / ${delaySec}s) → ${if (ok) "QUEUED" else "IGNORED"} ===")
+    }
+
+    private fun handleCancelWhitelistApp(context: Context, intent: Intent) {
+        val pkg = intent.getStringExtra("pkg")
+        if (pkg.isNullOrBlank()) {
+            Log.e("SelfControl.Cmd", "CANCEL_WHITELIST_APP: missing --es pkg")
+            return
+        }
+        val ok = WhitelistManager.cancelPendingRequest(context, pkg)
+        Log.w("SelfControl.Cmd", "=== CANCEL_WHITELIST_APP $pkg → ${if (ok) "CANCELED" else "NOT FOUND"} ===")
+    }
+
+    private fun handleRemoveWhitelistApp(context: Context, intent: Intent) {
+        val pkg = intent.getStringExtra("pkg")
+        if (pkg.isNullOrBlank()) {
+            Log.e("SelfControl.Cmd", "REMOVE_WHITELIST_APP: missing --es pkg")
+            return
+        }
+        val ok = WhitelistManager.removePackageFromWhitelist(context, pkg)
+        Log.w("SelfControl.Cmd", "=== REMOVE_WHITELIST_APP $pkg → ${if (ok) "REMOVED" else "NOT FOUND"} ===")
     }
 }

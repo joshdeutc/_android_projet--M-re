@@ -3,6 +3,7 @@ package com.jo.selfcontrol.ultimate
 import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
+import android.app.NotificationManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ApplicationInfo
@@ -34,7 +35,11 @@ class MainActivity : Activity() {
     }
 
     private val handler = Handler(Looper.getMainLooper())
-    private lateinit var permissionsContainer: LinearLayout
+    private lateinit var rootContainer: FrameLayout
+    private lateinit var setupScreenManager: SetupScreenManager
+    private lateinit var setupView: View
+    private var isSetupShowing = false
+    private var isManualGuideOpen = false
     private lateinit var dashboardContainer: LinearLayout
     private lateinit var delayContainer: LinearLayout
     private lateinit var nuclearStatusContainer: LinearLayout
@@ -58,6 +63,16 @@ class MainActivity : Activity() {
     private val selectedNuclearApps = mutableSetOf<String>()
     private var selectedDurationMs = 30 * 60 * 1000L
 
+    private var lastRenderedAllowed = emptySet<String>()
+    private var lastRenderedPending = emptyList<WhitelistManager.PendingRequest>()
+    private var lastRenderedDelayHours = -1
+    private var lastRenderedUseGlobal = false
+    private var lastRenderedPendingDelayAt = 0L
+    private var lastPendingUpdateSecond = 0L
+
+    private val appNameCache = java.util.concurrent.ConcurrentHashMap<String, String>()
+    private val appIconCache = java.util.concurrent.ConcurrentHashMap<String, Drawable>()
+
     private val refreshRunnable = object : Runnable {
         override fun run() {
             refreshPermissions()
@@ -78,6 +93,38 @@ class MainActivity : Activity() {
         LimitService.start(this)
         setContentView(buildUI())
         handler.postDelayed(refreshRunnable, 500)
+        handleIncomingIntent(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleIncomingIntent(intent)
+    }
+
+    private fun handleIncomingIntent(intent: Intent?) {
+        if (intent == null) return
+        val action = intent.action ?: return
+
+        if (action == "com.jo.selfcontrol.ultimate.ACTION_WHITELIST_PROMPT") {
+            val pkg = intent.getStringExtra("extra_package") ?: return
+            val label = intent.getStringExtra("extra_label") ?: getAppName(pkg)
+            val nm = getSystemService(NotificationManager::class.java)
+            nm?.cancel(200000 + pkg.hashCode())
+            if (::zoomCanvas.isInitialized && ::installBlocklistCircle.isInitialized) {
+                zoomCanvas.zoomInto(installBlocklistCircle)
+            }
+            confirmRequestAddition(pkg, label)
+        } else if (action == Intent.ACTION_SEND && intent.type == "text/plain") {
+            val text = intent.getStringExtra(Intent.EXTRA_TEXT) ?: return
+            val pkg = WhitelistManager.sanitizePackageName(text)
+            if (pkg.isNotBlank()) {
+                if (::zoomCanvas.isInitialized && ::installBlocklistCircle.isInitialized) {
+                    zoomCanvas.zoomInto(installBlocklistCircle)
+                }
+                confirmRequestAddition(pkg, getAppName(pkg))
+            }
+        }
     }
 
     override fun onResume() {
@@ -101,6 +148,14 @@ class MainActivity : Activity() {
     }
 
     override fun onBackPressed() {
+        if (isSetupShowing) {
+            if (isManualGuideOpen) {
+                dismissSetupScreen()
+                return
+            }
+            super.onBackPressed()
+            return
+        }
         if (::zoomCanvas.isInitialized && zoomCanvas.zoomedCircle != null) {
             zoomCanvas.zoomOut()
         } else {
@@ -113,14 +168,17 @@ class MainActivity : Activity() {
     // ──────────────────────────────────────
 
     private fun buildUI(): View {
+        rootContainer = FrameLayout(this).apply {
+            layoutParams = ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+            )
+            setBackgroundColor(Color.BLACK)
+        }
+
         zoomCanvas = com.jo.selfcontrol.ultimate.ui.ZoomableCanvasView(this)
 
         val createContainer = { -> LinearLayout(this).apply { orientation = LinearLayout.VERTICAL } }
-
-        // --- Permissions (hidden, outside circles) ---
-        permissionsContainer = createContainer()
-        permissionsContainer.visibility = View.GONE
-        zoomCanvas.addView(permissionsContainer)
 
         // =============================================
         //  CENTRAL HUB: Delay & Limits (the big one)
@@ -190,32 +248,28 @@ class MainActivity : Activity() {
         curfewCircle.addContent(periodBlocksContainer)
 
         // =============================================
-        //  SATELLITE 3: Install Blocklist (bottom-left)
+        //  SATELLITE 3: Whitelist (bottom-left)
         // =============================================
         installBlocklistCircle = com.jo.selfcontrol.ultimate.ui.FeatureCircleView(this).apply {
-            setFeatureTitle("Blocklist")
-            setSummaryText("Install rules")
-            onClickListener = { zoomCanvas.zoomInto(this) }
+            setFeatureTitle("Whitelist")
+            setSummaryText("Zero-Trust apps")
+            onClickListener = {
+                zoomCanvas.zoomInto(this)
+                refreshInstallBlocksUI(force = true)
+            }
         }
         val installHeader = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
         installHeader.addView(android.widget.Button(this@MainActivity).apply {
-            text = "+ New group"
+            text = "+ Demander une app (24h)"
             setTextColor(Color.WHITE)
             background = roundedBackground(Color.BLACK)
-            setOnClickListener { showNewInstallGroupDialog() }
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = dp(4) }
+            setOnClickListener { showRequestWhitelistAppDialog() }
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         })
-        installHeader.addView(android.widget.Button(this@MainActivity).apply {
-            text = "Import CSV"
-            setTextColor(Color.WHITE)
-            background = roundedBackground(Color.BLACK)
-            setOnClickListener { launchCsvPicker() }
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginStart = dp(4) }
-        })
-        installBlocklistCircle.addContent(sectionTitleWithHelp("Install Blocklist", HELP_INSTALL_BLOCK))
+        installBlocklistCircle.addContent(sectionTitleWithHelp("App Whitelist", HELP_WHITELIST))
         installBlocklistCircle.addContent(installHeader)
         installBlocksContainer = createContainer()
         installBlocklistCircle.addContent(installBlocksContainer)
@@ -297,9 +351,10 @@ class MainActivity : Activity() {
         val dm = resources.displayMetrics
         val screenW = dm.widthPixels
         val screenH = dm.heightPixels
+        val baseW = minOf(screenW, screenH)
 
-        val hubSize = (screenW * 0.38f).toInt()   
-        val satSize = (screenW * 0.24f).toInt()    
+        val hubSize = (baseW * 0.38f).toInt()   
+        val satSize = (baseW * 0.24f).toInt()    
 
         val hubCenterX = screenW / 2f
         val hubCenterY = screenH / 2f - dp(30)
@@ -364,10 +419,43 @@ class MainActivity : Activity() {
         zoomCanvas.addView(serviceStatusText)
         zoomCanvas.addView(deviceOwnerStatusText)
 
-        // Trigger the sequential entry animation after layout
-        zoomCanvas.post { zoomCanvas.startEntryAnimation() }
+        rootContainer.addView(zoomCanvas)
 
-        return zoomCanvas
+        setupScreenManager = SetupScreenManager(this) {
+            dismissSetupScreen()
+        }
+        setupView = setupScreenManager.buildView()
+        rootContainer.addView(setupView)
+
+        val isMandatoryDone = PermissionHelper.isMandatorySetupComplete(this)
+        if (isMandatoryDone) {
+            setupView.visibility = View.GONE
+            zoomCanvas.visibility = View.VISIBLE
+            isSetupShowing = false
+            zoomCanvas.post { zoomCanvas.startEntryAnimation() }
+        } else {
+            setupView.visibility = View.VISIBLE
+            zoomCanvas.visibility = View.GONE
+            isSetupShowing = true
+        }
+
+        return rootContainer
+    }
+
+    private fun dismissSetupScreen() {
+        if (!isSetupShowing) return
+        isSetupShowing = false
+        isManualGuideOpen = false
+        zoomCanvas.visibility = View.VISIBLE
+        zoomCanvas.startEntryAnimation()
+        zoomCanvas.startFloatingAnimation()
+        setupView.animate()
+            .alpha(0f)
+            .setDuration(350)
+            .withEndAction {
+                setupView.visibility = View.GONE
+                setupView.alpha = 1f
+            }
     }
 
     // ──────────────────────────────────────
@@ -375,69 +463,23 @@ class MainActivity : Activity() {
     // ──────────────────────────────────────
 
     private fun refreshPermissions() {
-        val needsUsage = !PermissionHelper.hasUsageStatsPermission(this)
-        val needsA11y = !PermissionHelper.hasAccessibilityPermission(this)
-        val needsDnd = !PermissionHelper.hasNotificationPolicyPermission(this)
-        val needsNotifListener = !PermissionHelper.hasNotificationListenerPermission(this)
-        val needsPostNotif = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-                checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
-
-        if (!needsUsage && !needsA11y && !needsDnd && !needsNotifListener && !needsPostNotif) {
-            permissionsContainer.visibility = View.GONE
-            return
+        if (::setupScreenManager.isInitialized) {
+            setupScreenManager.refresh()
         }
 
-        permissionsContainer.visibility = View.VISIBLE
-        permissionsContainer.removeAllViews()
-        permissionsContainer.addView(TextView(this).apply {
-            text = "Required Permissions Missing!"
-            setTextColor(Color.parseColor("#FF5252"))
-            typeface = Typeface.DEFAULT_BOLD
-            textSize = 16f
-            setPadding(dp(8), dp(8), dp(8), dp(8))
-        })
-
-        if (needsUsage) {
-            permissionsContainer.addView(Button(this).apply {
-                text = "Grant Usage Stats Access"
-                setOnClickListener { PermissionHelper.requestUsageStatsPermission(this@MainActivity) }
-            })
-        }
-        if (needsA11y) {
-            permissionsContainer.addView(Button(this).apply {
-                text = "Grant Accessibility Service"
-                setOnClickListener { PermissionHelper.requestAccessibilityPermission(this@MainActivity) }
-            })
-        }
-        if (needsDnd) {
-            permissionsContainer.addView(Button(this).apply {
-                text = "Enable DND priority mode"
-                background = roundedBackground(Color.parseColor("#2F3BFF"))
-                setTextColor(Color.WHITE)
-                setOnClickListener { PermissionHelper.requestNotificationPolicyPermission(this@MainActivity) }
-            })
-        }
-
-        if (needsNotifListener) {
-            permissionsContainer.addView(Button(this).apply {
-                text = "Grant Notification Access (mute blocked apps)"
-                background = roundedBackground(Color.parseColor("#2F3BFF"))
-                setTextColor(Color.WHITE)
-                setOnClickListener { PermissionHelper.requestNotificationListenerPermission(this@MainActivity) }
-            })
-        }
-
-        if (needsPostNotif) {
-            permissionsContainer.addView(Button(this).apply {
-                text = "Allow Notifications"
-                background = roundedBackground(Color.parseColor("#2F3BFF"))
-                setTextColor(Color.WHITE)
-                setOnClickListener {
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                        requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1001)
-                    }
-                }
-            })
+        val isMandatoryDone = PermissionHelper.isMandatorySetupComplete(this)
+        if (!isMandatoryDone) {
+            if (!isSetupShowing && ::setupView.isInitialized) {
+                isSetupShowing = true
+                isManualGuideOpen = false
+                setupView.alpha = 1f
+                setupView.visibility = View.VISIBLE
+                zoomCanvas.visibility = View.GONE
+            }
+        } else {
+            if (isSetupShowing && !isManualGuideOpen) {
+                dismissSetupScreen()
+            }
         }
     }
 
@@ -486,6 +528,26 @@ class MainActivity : Activity() {
             background = roundedBackground(Color.parseColor("#333333"))
             setTextColor(Color.WHITE)
             setOnClickListener { showAddDelayScheduleRuleDialog() }
+        })
+
+        delayContainer.addView(Button(this).apply {
+            text = "📋 Guide Paramètres & Permissions"
+            background = roundedBackground(Color.parseColor("#1C202A"))
+            setTextColor(Color.parseColor("#8E92A4"))
+            val lp = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { setMargins(0, dp(8), 0, 0) }
+            layoutParams = lp
+            setOnClickListener {
+                if (::zoomCanvas.isInitialized) zoomCanvas.zoomOut()
+                setupScreenManager.refresh()
+                setupView.alpha = 1f
+                setupView.visibility = View.VISIBLE
+                zoomCanvas.visibility = View.GONE
+                isSetupShowing = true
+                isManualGuideOpen = true
+            }
         })
 
         if (delayState.delaySchedule.isNotEmpty()) {
@@ -615,6 +677,107 @@ class MainActivity : Activity() {
                     setTextColor(Color.WHITE)
                     background = roundedBackground(Color.parseColor("#D32F2F"))
                     setOnClickListener { DelayManager.cancelPendingDelayChange(this@MainActivity) }
+                })
+            }
+        }
+
+        // Pending Whitelist quarantine requests
+        val whitelistState = WhitelistManager.loadState(this)
+        if (whitelistState.pendingRequests.isNotEmpty()) {
+            delayContainer.addView(TextView(this).apply {
+                text = "⏳ Quarantaine Whitelist (${whitelistState.pendingRequests.size})"
+                setTextColor(Color.parseColor("#FF9800"))
+                textSize = 14f
+                typeface = Typeface.DEFAULT_BOLD
+                setPadding(0, dp(16), 0, dp(8))
+            })
+
+            for (req in whitelistState.pendingRequests) {
+                val remainingSec = ((req.availableAt - now) / 1000).toInt().coerceAtLeast(0)
+                val appLabel = getAppName(req.packageName)
+
+                val card = LinearLayout(this).apply {
+                    orientation = LinearLayout.VERTICAL
+                    setPadding(dp(12), dp(10), dp(12), dp(10))
+                    background = roundedBackground(Color.WHITE)
+                    layoutParams = LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT
+                    ).apply { bottomMargin = dp(8) }
+
+                    val row = LinearLayout(this@MainActivity).apply {
+                        orientation = LinearLayout.HORIZONTAL
+                        gravity = Gravity.CENTER_VERTICAL
+
+                        val iconView = ImageView(this@MainActivity).apply {
+                            setImageDrawable(getAppIcon(req.packageName))
+                            layoutParams = LinearLayout.LayoutParams(dp(36), dp(36)).apply { marginEnd = dp(8) }
+                        }
+                        addView(iconView)
+
+                        val txt = LinearLayout(this@MainActivity).apply {
+                            orientation = LinearLayout.VERTICAL
+                            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                            addView(TextView(this@MainActivity).apply {
+                                text = appLabel
+                                textSize = 14f
+                                typeface = Typeface.DEFAULT_BOLD
+                                setTextColor(Color.BLACK)
+                            })
+                            addView(TextView(this@MainActivity).apply {
+                                text = "Déblocage dans ${formatTime(remainingSec)}"
+                                textSize = 12f
+                                setTextColor(Color.parseColor("#E65100"))
+                            })
+                        }
+                        addView(txt)
+                    }
+                    addView(row)
+
+                    val cancelBtn = Button(this@MainActivity).apply {
+                        text = "Annuler la demande"
+                        setTextColor(Color.WHITE)
+                        background = roundedBackground(Color.parseColor("#D32F2F"))
+                        val lp = LinearLayout.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            ViewGroup.LayoutParams.WRAP_CONTENT
+                        ).apply { topMargin = dp(8) }
+                        layoutParams = lp
+                        setOnClickListener {
+                            WhitelistManager.cancelPendingRequest(this@MainActivity, req.packageName)
+                            Toast.makeText(this@MainActivity, "Demande annulée", Toast.LENGTH_SHORT).show()
+                            refreshDelayUI()
+                            refreshInstallBlocksUI(force = true)
+                        }
+                    }
+                    addView(cancelBtn)
+                }
+                delayContainer.addView(card)
+            }
+        }
+
+        // Pending Whitelist delay reduction
+        if (whitelistState.pendingDelayExecuteAt > 0L && whitelistState.pendingDelayHours != null) {
+            val nowPending = System.currentTimeMillis()
+            if (whitelistState.pendingDelayExecuteAt > nowPending) {
+                val remainingSec = ((whitelistState.pendingDelayExecuteAt - nowPending) / 1000).toInt()
+                val targetText = if (whitelistState.pendingDelayUseGlobal) "Aligné sur délai général" else "${whitelistState.pendingDelayHours}h"
+                delayContainer.addView(TextView(this).apply {
+                    text = "⏳ Modification délai Whitelist en attente : ${formatTime(remainingSec)} (→ $targetText)"
+                    setTextColor(Color.parseColor("#FFCA28"))
+                    textSize = 14f
+                    setPadding(0, dp(12), 0, dp(8))
+                })
+                delayContainer.addView(Button(this).apply {
+                    text = "Annuler le changement de délai Whitelist"
+                    setTextColor(Color.WHITE)
+                    background = roundedBackground(Color.parseColor("#D32F2F"))
+                    setOnClickListener {
+                        WhitelistManager.cancelPendingDelayChange(this@MainActivity)
+                        Toast.makeText(this@MainActivity, "Modification annulée", Toast.LENGTH_SHORT).show()
+                        refreshDelayUI()
+                        refreshInstallBlocksUI(force = true)
+                    }
                 })
             }
         }
@@ -1323,134 +1486,312 @@ class MainActivity : Activity() {
     }
 
     // ──────────────────────────────────────
-    //  Install Blocklist
+    //  Whitelist (Zero-Trust)
     // ──────────────────────────────────────
 
-    private fun refreshInstallBlocksUI() {
-        installBlocksContainer.removeAllViews()
-        val cfg = ConfigManager.loadConfig(this)
-        if (cfg.installBlocks.isEmpty()) {
-            installBlocklistCircle.setSummaryText("0 rules")
-            installBlocksContainer.addView(TextView(this).apply {
-                text = "No install-block group."
-                textSize = 14f
-                setTextColor(Color.parseColor("#888888"))
-                setPadding(dp(8), dp(8), dp(8), dp(8))
-            })
+    private fun refreshInstallBlocksUI(force: Boolean = false) {
+        val state = WhitelistManager.loadState(this)
+        val allowedCount = state.allowedPackages.size
+        val pendingCount = state.pendingRequests.size
+
+        if (pendingCount > 0) {
+            installBlocklistCircle.setSummaryText("$allowedCount autorisées · $pendingCount en attente")
+        } else {
+            installBlocklistCircle.setSummaryText("$allowedCount apps autorisées")
+        }
+
+        // Performance critical: do NOT build 400+ UI views if user is not looking inside this circle
+        if (::zoomCanvas.isInitialized && zoomCanvas.zoomedCircle != installBlocklistCircle) {
             return
         }
-        val groupCount = cfg.installBlocks.size
-        val totalPkgs = cfg.installBlocks.sumOf { it.packages.size }
-        if (groupCount == 1) {
-            installBlocklistCircle.setSummaryText("$totalPkgs apps blocked")
-        } else {
-            installBlocklistCircle.setSummaryText("$groupCount grp · $totalPkgs apps")
-        }
-        val neutralised = InstallBlockManager.loadHiddenState(this)
-        for (group in cfg.installBlocks) {
-            installBlocksContainer.addView(buildInstallGroupRow(group, neutralised))
-        }
-    }
 
-    private fun buildInstallGroupRow(
-        group: ConfigManager.InstallBlockGroup,
-        neutralised: Set<String>
-    ): LinearLayout {
-        val activeCount = group.packages.count { it in neutralised }
-        return LinearLayout(this).apply {
+        val currentSecond = System.currentTimeMillis() / 1000
+        val needTimeRefresh = pendingCount > 0 && (currentSecond - lastPendingUpdateSecond >= 30)
+        val stateChanged = state.allowedPackages != lastRenderedAllowed ||
+            state.pendingRequests != lastRenderedPending ||
+            state.quarantineDelayHours != lastRenderedDelayHours ||
+            state.useGlobalDelay != lastRenderedUseGlobal ||
+            state.pendingDelayExecuteAt != lastRenderedPendingDelayAt
+
+        if (!force && !stateChanged && !needTimeRefresh) {
+            return
+        }
+
+        lastRenderedAllowed = state.allowedPackages
+        lastRenderedPending = state.pendingRequests
+        lastRenderedDelayHours = state.quarantineDelayHours
+        lastRenderedUseGlobal = state.useGlobalDelay
+        lastRenderedPendingDelayAt = state.pendingDelayExecuteAt
+        lastPendingUpdateSecond = currentSecond
+
+        installBlocksContainer.removeAllViews()
+        val now = System.currentTimeMillis()
+
+        // 0. Configuration du Délai de Quarantaine
+        val effectiveHours = WhitelistManager.getEffectiveQuarantineDelayHours(this)
+        val delayDesc = if (state.useGlobalDelay) {
+            "${effectiveHours}h (Aligné sur délai général)"
+        } else {
+            "${effectiveHours}h"
+        }
+
+        val delayCard = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(8), dp(8), dp(8), dp(8))
-            background = roundedBackground(Color.WHITE)
+            setPadding(dp(12), dp(10), dp(12), dp(10))
+            background = roundedBackground(Color.parseColor("#1E2430"))
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply { bottomMargin = dp(8) }
+            ).apply { bottomMargin = dp(10) }
 
-            addView(TextView(this@MainActivity).apply {
-                text = group.name
-                textSize = 15f
-                typeface = Typeface.DEFAULT_BOLD
-                setTextColor(Color.BLACK)
-                setOnClickListener { showInstallGroupPackagesDialog(group, neutralised) }
-            })
-            addView(TextView(this@MainActivity).apply {
-                text = "${group.packages.size} package(s) listed — $activeCount currently neutralised"
-                textSize = 13f
-                setTextColor(Color.BLACK)
-            })
-            addView(TextView(this@MainActivity).apply {
-                text = if (group.protectionDelaySec != null) {
-                    "🔒 Protected — ${formatLongDuration(group.protectionDelaySec)} to change"
-                } else {
-                    "Protection: global delay"
-                }
-                textSize = 12f
-                setTextColor(
-                    if (group.protectionDelaySec != null) Color.BLACK
-                    else Color.BLACK
-                )
-            })
-
-            addView(LinearLayout(this@MainActivity).apply {
+            val row = LinearLayout(this@MainActivity).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
                 layoutParams = LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
                     ViewGroup.LayoutParams.WRAP_CONTENT
-                ).apply { topMargin = dp(4) }
+                )
 
-                addView(Button(this@MainActivity).apply {
-                    text = "Apps"
-                    setTextColor(Color.WHITE)
-                    background = roundedBackground(Color.BLACK)
+                val txt = TextView(this@MainActivity).apply {
+                    text = "⏱️ Délai de quarantaine : $delayDesc"
+                    setTextColor(Color.parseColor("#E0E6ED"))
+                    textSize = 13f
+                    typeface = Typeface.DEFAULT_BOLD
                     layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-                        .apply { marginEnd = dp(4) }
-                    setOnClickListener { showEditInstallGroupAppsDialog(group) }
-                })
-                addView(Button(this@MainActivity).apply {
-                    text = "Timer"
+                }
+                addView(txt)
+
+                val editBtn = Button(this@MainActivity).apply {
+                    text = "Modifier"
+                    textSize = 12f
                     setTextColor(Color.WHITE)
-                    background = roundedBackground(Color.BLACK)
-                    layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-                        .apply { marginEnd = dp(4) }
-                    setOnClickListener {
-                        showProtectionTimerDialog(group.protectionDelaySec) { picked ->
-                            updateInstallGroup(group.name) { it.copy(protectionDelaySec = picked) }
+                    background = roundedBackground(Color.parseColor("#3A4558"))
+                    setPadding(dp(12), dp(4), dp(12), dp(4))
+                    setOnClickListener { showChangeWhitelistDelayDialog() }
+                }
+                addView(editBtn)
+            }
+            addView(row)
+
+            if (state.pendingDelayExecuteAt > now && state.pendingDelayHours != null) {
+                val remainSec = ((state.pendingDelayExecuteAt - now) / 1000).toInt()
+                val targetText = if (state.pendingDelayUseGlobal) "Aligné sur délai général" else "${state.pendingDelayHours}h"
+                val pendingRow = LinearLayout(this@MainActivity).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    setPadding(0, dp(8), 0, 0)
+                    addView(TextView(this@MainActivity).apply {
+                        text = "⏳ Réduction vers $targetText dans ${formatTime(remainSec)}"
+                        setTextColor(Color.parseColor("#FFCA28"))
+                        textSize = 12f
+                        layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                    })
+                    addView(Button(this@MainActivity).apply {
+                        text = "Annuler"
+                        textSize = 11f
+                        setTextColor(Color.WHITE)
+                        background = roundedBackground(Color.parseColor("#C62828"))
+                        setPadding(dp(8), dp(2), dp(8), dp(2))
+                        setOnClickListener {
+                            WhitelistManager.cancelPendingDelayChange(this@MainActivity)
+                            Toast.makeText(this@MainActivity, "Modification annulée", Toast.LENGTH_SHORT).show()
+                            refreshInstallBlocksUI(force = true)
+                            refreshDelayUI()
                         }
-                    }
-                })
-                addView(Button(this@MainActivity).apply {
-                    text = "Delete"
-                    setTextColor(Color.WHITE)
-                    background = roundedBackground(Color.parseColor("#D32F2F"))
-                    layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-                        .apply { marginStart = dp(4) }
-                    setOnClickListener { confirmDeleteInstallGroup(group) }
-                })
+                    })
+                }
+                addView(pendingRow)
+            }
+        }
+        installBlocksContainer.addView(delayCard)
+
+        // 1. Quarantaine (Demandes en attente)
+        if (state.pendingRequests.isNotEmpty()) {
+            installBlocksContainer.addView(TextView(this).apply {
+                text = "⏳ En quarantaine ($pendingCount)"
+                textSize = 14f
+                typeface = Typeface.DEFAULT_BOLD
+                setTextColor(Color.parseColor("#E65100"))
+                setPadding(dp(8), dp(8), dp(8), dp(4))
             })
+
+            for (req in state.pendingRequests) {
+                val remainMs = (req.availableAt - now).coerceAtLeast(0L)
+                val remainHours = remainMs / 3600_000L
+                val remainMins = (remainMs % 3600_000L) / 60_000L
+                val timeStr = if (remainHours > 0) "${remainHours}h ${remainMins}m" else "${remainMins}m"
+                val appLabel = getAppName(req.packageName)
+
+                val row = LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    setPadding(dp(10), dp(8), dp(10), dp(8))
+                    background = roundedBackground(Color.WHITE)
+                    layoutParams = LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT
+                    ).apply { bottomMargin = dp(6) }
+
+                    val icon = getAppIcon(req.packageName)
+                    val iconView = ImageView(this@MainActivity).apply {
+                        setImageDrawable(icon)
+                        layoutParams = LinearLayout.LayoutParams(dp(36), dp(36)).apply { marginEnd = dp(8) }
+                    }
+                    addView(iconView)
+
+                    val textLayout = LinearLayout(this@MainActivity).apply {
+                        orientation = LinearLayout.VERTICAL
+                        layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                        addView(TextView(this@MainActivity).apply {
+                            text = appLabel
+                            textSize = 14f
+                            typeface = Typeface.DEFAULT_BOLD
+                            setTextColor(Color.BLACK)
+                        })
+                        addView(TextView(this@MainActivity).apply {
+                            text = "Débloquée dans $timeStr"
+                            textSize = 12f
+                            setTextColor(Color.parseColor("#E65100"))
+                        })
+                    }
+                    addView(textLayout)
+
+                    addView(Button(this@MainActivity).apply {
+                        text = "Annuler"
+                        textSize = 11f
+                        setTextColor(Color.WHITE)
+                        background = roundedBackground(Color.parseColor("#C62828"))
+                        setOnClickListener {
+                            WhitelistManager.cancelPendingRequest(this@MainActivity, req.packageName)
+                            Toast.makeText(this@MainActivity, "Demande annulée", Toast.LENGTH_SHORT).show()
+                            refreshInstallBlocksUI()
+                        }
+                    })
+                }
+                installBlocksContainer.addView(row)
+            }
+        }
+
+        // 2. Applications autorisées (Whitelist)
+        installBlocksContainer.addView(TextView(this).apply {
+            text = "✅ Applications autorisées ($allowedCount)"
+            textSize = 14f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.BLACK)
+            setPadding(dp(8), dp(10), dp(8), dp(4))
+        })
+
+        val sortedList = state.allowedPackages.sortedBy { pkg ->
+            getAppName(pkg).lowercase()
+        }
+
+        for (pkg in sortedList) {
+            val appLabel = getAppName(pkg)
+            val icon = getAppIcon(pkg)
+
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(10), dp(6), dp(10), dp(6))
+                background = roundedBackground(Color.WHITE)
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { bottomMargin = dp(4) }
+
+                val iconView = ImageView(this@MainActivity).apply {
+                    setImageDrawable(icon)
+                    layoutParams = LinearLayout.LayoutParams(dp(36), dp(36)).apply { marginEnd = dp(8) }
+                }
+                addView(iconView)
+
+                val textLayout = LinearLayout(this@MainActivity).apply {
+                    orientation = LinearLayout.VERTICAL
+                    layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                    addView(TextView(this@MainActivity).apply {
+                        text = appLabel
+                        textSize = 14f
+                        typeface = Typeface.DEFAULT_BOLD
+                        setTextColor(Color.BLACK)
+                    })
+                    addView(TextView(this@MainActivity).apply {
+                        text = pkg
+                        textSize = 11f
+                        setTextColor(Color.parseColor("#757575"))
+                    })
+                }
+                addView(textLayout)
+
+                if (pkg != packageName) {
+                    addView(Button(this@MainActivity).apply {
+                        text = "Bloquer"
+                        textSize = 11f
+                        setTextColor(Color.WHITE)
+                        background = roundedBackground(Color.BLACK)
+                        setOnClickListener {
+                            showConfirmRemoveFromWhitelistDialog(pkg, appLabel)
+                        }
+                    })
+                }
+            }
+            installBlocksContainer.addView(row)
         }
     }
 
-    private fun showInstallGroupPackagesDialog(
-        group: ConfigManager.InstallBlockGroup,
-        neutralised: Set<String>
-    ) {
-        val body = group.packages.sorted().joinToString("\n") { pkg ->
-            val mark = if (pkg in neutralised) "🚫" else "·"
-            "$mark $pkg"
+    private fun showRequestWhitelistAppDialog() {
+        val state = WhitelistManager.loadState(this)
+        val hiddenPackages = WhitelistManager.loadHiddenState(this)
+        val pm = packageManager
+        val candidates = try {
+            pm.getInstalledApplications(PackageManager.MATCH_UNINSTALLED_PACKAGES)
+                .filter { app ->
+                    val isSystem = (app.flags and ApplicationInfo.FLAG_SYSTEM) != 0
+                    val isHiddenByUs = app.packageName in hiddenPackages
+                    val isLaunchable = pm.getLaunchIntentForPackage(app.packageName) != null
+                    app.packageName != packageName &&
+                        app.packageName !in state.allowedPackages &&
+                        (isHiddenByUs || !isSystem || isLaunchable)
+                }
+                .sortedWith(
+                    compareByDescending<ApplicationInfo> { it.packageName in hiddenPackages }
+                        .thenBy { getAppName(it.packageName).lowercase() }
+                )
+        } catch (e: Exception) {
+            emptyList()
         }
+
+        val items = mutableListOf<String>()
+        val packageMap = mutableListOf<String>()
+
+        items.add("✏️ Saisir un nom de package...")
+        packageMap.add("")
+
+        for (app in candidates) {
+            val label = getAppName(app.packageName)
+            val prefix = if (app.packageName in hiddenPackages) "⚡ Récemment installée / Bloquée : " else ""
+            items.add("$prefix$label (${app.packageName})")
+            packageMap.add(app.packageName)
+        }
+
         val dialog = AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog)
-            .setTitle(group.name)
-            .setMessage("🚫 = installed and neutralised, · = not installed (blocked on sight)\n\n$body")
-            .setPositiveButton("Close", null)
+            .setTitle("Demander une application")
+            .setItems(items.toTypedArray()) { _, which ->
+                if (which == 0) {
+                    showCustomPackageInputDialog()
+                } else {
+                    val pkg = packageMap[which]
+                    confirmRequestAddition(pkg, getAppName(pkg))
+                }
+            }
+            .setNegativeButton("Annuler", null)
             .create()
         styleDialogForDarkTheme(dialog)
         dialog.show()
     }
 
-    private fun showNewInstallGroupDialog() {
+    private fun showCustomPackageInputDialog() {
         val input = EditText(this).apply {
-            hint = "Group name (e.g. Browsers)"
+            hint = "com.exemple.application"
             setTextColor(Color.WHITE)
             setHintTextColor(Color.parseColor("#888888"))
         }
@@ -1460,101 +1801,136 @@ class MainActivity : Activity() {
             addView(input)
         }
         val dialog = AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog)
-            .setTitle("New install-block group")
+            .setTitle("Nom exact du package")
             .setView(wrap)
-            .setPositiveButton("Next") { _, _ ->
-                val name = input.text.toString().trim()
-                if (name.isEmpty()) {
-                    Toast.makeText(this, "Name required", Toast.LENGTH_SHORT).show()
-                    return@setPositiveButton
+            .setPositiveButton("Suivant") { _, _ ->
+                val pkg = input.text.toString().trim()
+                if (pkg.isNotEmpty()) {
+                    confirmRequestAddition(pkg, getAppName(pkg))
                 }
-                if (loadEditableConfig().installBlocks.any { it.name == name }) {
-                    Toast.makeText(this, "A group named \"$name\" already exists", Toast.LENGTH_SHORT).show()
-                    return@setPositiveButton
-                }
-                showEditInstallGroupAppsDialog(ConfigManager.InstallBlockGroup(name, emptyList()))
             }
-            .setNegativeButton("Cancel", null)
+            .setNegativeButton("Annuler", null)
             .create()
         styleDialogForDarkTheme(dialog)
         dialog.show()
     }
 
-    /**
-     * The picker only lists *installed launchable* apps, so packages that came from a CSV and
-     * aren't installed (the whole point of a blocklist) would vanish on save. They are carried
-     * over untouched and reported in the dialog.
-     */
-    private fun showEditInstallGroupAppsDialog(group: ConfigManager.InstallBlockGroup) {
-        val apps = getInstalledLaunchableApps()
-        val listed = apps.map { it.packageName }.toSet()
-        val invisible = group.packages.filterNot { it in listed }
-        val selected = mutableSetOf<String>()
+    private fun confirmRequestAddition(pkg: String, label: String) {
+        val delaySec = WhitelistManager.getEffectiveQuarantineDelaySeconds(this)
+        val delayHours = WhitelistManager.getEffectiveQuarantineDelayHours(this)
+        val delayText = if (delaySec >= 3600) "${delayHours} heure(s)" else "${delaySec / 60} minute(s)"
+        val unlockTime = System.currentTimeMillis() + delaySec * 1000L
+        val unlockDateStr = java.text.SimpleDateFormat("dd/MM/yyyy à HH:mm", java.util.Locale.FRANCE).format(java.util.Date(unlockTime))
 
-        val listView = buildAppCheckListView(apps, selected, preChecked = group.packages.toSet())
-
-        // The note goes in the dialog's own message slot rather than a wrapper LinearLayout: a
-        // weighted ListView inside a WRAP_CONTENT dialog view collapses to zero height.
-        val builder = AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog)
-            .setTitle("Apps blocked in ${group.name}")
-            .setView(listView)
-        if (invisible.isNotEmpty()) {
-            builder.setMessage(
-                "${invisible.size} listed package(s) aren't installed and stay in the group — " +
-                    "edit those via CSV import."
+        val dialog = AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog)
+            .setTitle("Mettre en quarantaine ?")
+            .setMessage(
+                "L'application \"$label\" sera placée dans un sas de quarantaine de $delayText.\n\n" +
+                    "Pendant cette période, elle reste complètement bloquée et masquée.\n" +
+                    "Elle rejoindra automatiquement la Whitelist le $unlockDateStr."
             )
+            .setPositiveButton("Confirmer ($delayText)") { _, _ ->
+                val ok = WhitelistManager.requestAppAddition(this, pkg, delaySec)
+                if (ok) {
+                    Toast.makeText(this, "\"$label\" mise en quarantaine ($delayText)", Toast.LENGTH_LONG).show()
+                    refreshInstallBlocksUI(force = true)
+                    refreshDelayUI()
+                } else {
+                    Toast.makeText(this, "Application déjà dans la whitelist ou en attente", Toast.LENGTH_SHORT).show()
+                }
+            }
+            .setNegativeButton("Annuler", null)
+            .create()
+        styleDialogForDarkTheme(dialog)
+        dialog.show()
+    }
+
+    private fun showChangeWhitelistDelayDialog() {
+        val globalDelaySec = DelayManager.getCurrentEffectiveDelaySeconds(this)
+        val globalDelayHours = (globalDelaySec / 3600).coerceAtLeast(1)
+        val globalDesc = if (globalDelaySec >= 3600) "${globalDelayHours}h" else "${globalDelaySec / 60}m"
+        val options = arrayOf(
+            "Délai dédié : 12 heures",
+            "Délai dédié : 24 heures (Défaut)",
+            "Délai dédié : 48 heures",
+            "Délai dédié : 72 heures",
+            "Délai dédié personnalisé...",
+            "🔗 Aligner sur le délai général ($globalDesc)"
+        )
+
+        val dialog = AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog)
+            .setTitle("Délai de quarantaine Whitelist")
+            .setItems(options) { _, which ->
+                when (which) {
+                    0 -> applyWhitelistDelayChange(12, false)
+                    1 -> applyWhitelistDelayChange(24, false)
+                    2 -> applyWhitelistDelayChange(48, false)
+                    3 -> applyWhitelistDelayChange(72, false)
+                    4 -> showCustomWhitelistDelayDialog()
+                    5 -> applyWhitelistDelayChange(globalDelayHours, true)
+                }
+            }
+            .setNegativeButton("Annuler", null)
+            .create()
+        styleDialogForDarkTheme(dialog)
+        dialog.show()
+    }
+
+    private fun applyWhitelistDelayChange(hours: Int, useGlobal: Boolean) {
+        val result = WhitelistManager.setQuarantineDelay(this, hours, useGlobal)
+        Toast.makeText(this, result, Toast.LENGTH_LONG).show()
+        refreshInstallBlocksUI(force = true)
+        refreshDelayUI()
+    }
+
+    private fun showCustomWhitelistDelayDialog() {
+        val layout = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            setPadding(dp(24), dp(16), dp(24), dp(16))
         }
 
-        val dialog = builder
-            .setPositiveButton("Save") { _, _ ->
-                val packages = (selected + invisible).distinct()
-                if (packages.isEmpty()) {
-                    Toast.makeText(this, "Select at least one app", Toast.LENGTH_SHORT).show()
-                    return@setPositiveButton
-                }
-                val cur = loadEditableConfig()
-                val exists = cur.installBlocks.any { it.name == group.name }
-                val updated = if (exists) {
-                    cur.installBlocks.map {
-                        if (it.name == group.name) it.copy(packages = packages) else it
-                    }
-                } else {
-                    cur.installBlocks + group.copy(packages = packages)
-                }
-                saveConfigWithDelay(cur.copy(installBlocks = updated))
+        val picker = NumberPicker(this).apply {
+            minValue = 1
+            maxValue = 720
+            value = WhitelistManager.getEffectiveQuarantineDelayHours(this@MainActivity)
+            wrapSelectorWheel = false
+        }
+        layout.addView(picker)
+
+        layout.addView(TextView(this).apply {
+            text = " heure(s)"
+            textSize = 16f
+            setTextColor(Color.WHITE)
+            setPadding(dp(8), 0, 0, 0)
+        })
+
+        val dialog = AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog)
+            .setTitle("Délai personnalisé (heures)")
+            .setView(layout)
+            .setPositiveButton("Confirmer") { _, _ ->
+                applyWhitelistDelayChange(picker.value, false)
             }
-            .setNegativeButton("Cancel", null)
+            .setNegativeButton("Retour") { _, _ -> showChangeWhitelistDelayDialog() }
             .create()
         styleDialogForDarkTheme(dialog)
         dialog.show()
     }
 
-    private fun updateInstallGroup(
-        name: String,
-        transform: (ConfigManager.InstallBlockGroup) -> ConfigManager.InstallBlockGroup
-    ) {
-        val cur = loadEditableConfig()
-        val updated = cur.installBlocks.map { if (it.name == name) transform(it) else it }
-        saveConfigWithDelay(cur.copy(installBlocks = updated))
-    }
-
-    private fun confirmDeleteInstallGroup(group: ConfigManager.InstallBlockGroup) {
-        val wait = group.protectionDelaySec
-            ?: DelayManager.getCurrentEffectiveDelaySeconds(this)
+    private fun showConfirmRemoveFromWhitelistDialog(pkg: String, label: String) {
         val dialog = AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog)
-            .setTitle("Delete \"${group.name}\"?")
+            .setTitle("Bloquer \"$label\" ?")
             .setMessage(
-                "${group.packages.size} package(s) would become installable and usable again.\n\n" +
-                    "This is a relaxation, so it waits ${formatLongDuration(wait)} before taking " +
-                    "effect. Apps are un-hidden only once that delay expires."
+                "L'application sera immédiatement retirée de la Whitelist.\n\n" +
+                    "Elle sera masquée du lanceur et son accès sera instantanément verrouillé."
             )
-            .setPositiveButton("Request deletion") { _, _ ->
-                val cur = loadEditableConfig()
-                saveConfigWithDelay(
-                    cur.copy(installBlocks = cur.installBlocks.filterNot { it.name == group.name })
-                )
+            .setPositiveButton("Bloquer immédiatement") { _, _ ->
+                WhitelistManager.removePackageFromWhitelist(this, pkg)
+                Toast.makeText(this, "\"$label\" a été bloquée", Toast.LENGTH_SHORT).show()
+                refreshInstallBlocksUI(force = true)
+                refreshDelayUI()
             }
-            .setNegativeButton("Cancel", null)
+            .setNegativeButton("Annuler", null)
             .create()
         styleDialogForDarkTheme(dialog)
         dialog.show()
@@ -2288,19 +2664,23 @@ class MainActivity : Activity() {
     // ──────────────────────────────────────
 
     private fun getAppName(pkg: String): String {
-        return try {
-            val ai = packageManager.getApplicationInfo(pkg, 0)
-            packageManager.getApplicationLabel(ai).toString()
-        } catch (e: PackageManager.NameNotFoundException) {
-            pkg.substringAfterLast('.')
+        return appNameCache.getOrPut(pkg) {
+            try {
+                val ai = packageManager.getApplicationInfo(pkg, 0)
+                packageManager.getApplicationLabel(ai).toString()
+            } catch (e: PackageManager.NameNotFoundException) {
+                pkg.substringAfterLast('.')
+            }
         }
     }
 
     private fun getAppIcon(pkg: String): Drawable {
-        return try {
-            packageManager.getApplicationIcon(pkg)
-        } catch (e: PackageManager.NameNotFoundException) {
-            getDrawable(android.R.drawable.sym_def_app_icon)!!
+        return appIconCache.getOrPut(pkg) {
+            try {
+                packageManager.getApplicationIcon(pkg)
+            } catch (e: PackageManager.NameNotFoundException) {
+                getDrawable(android.R.drawable.sym_def_app_icon)!!
+            }
         }
     }
 
@@ -2583,22 +2963,18 @@ class MainActivity : Activity() {
         tip = "Great for social media at night — set a curfew from 10pm to 7am on weekdays."
     )
 
-    private val HELP_INSTALL_BLOCK = HelpContent(
-        title = "Install Blocklist",
-        emoji = "🚫",
-        summary = "Name a batch of apps that must never run here — browsers, stores, anything you " +
-            "don't want a way back into. Listed apps are hidden the instant they appear.",
+    private val HELP_WHITELIST = HelpContent(
+        title = "App Whitelist (Zero-Trust)",
+        emoji = "🛡️",
+        summary = "Seules les applications inscrites sur cette Whitelist sont autorisées à tourner sur l'appareil. Toute application non approuvée est immédiatement verrouillée et masquée.",
         steps = listOf(
-            "Tap '+ New group', name it (e.g. Browsers), then pick the apps.",
-            "For a long list, write a CSV with two columns — group,package — and tap 'Import CSV'.",
-            "Any listed app already on the device is hidden right away, preinstalled ones included.",
-            "If one ever gets installed later, it is hidden within milliseconds of appearing.",
-            "Give each group its own protection timer so undoing it takes real time.",
-            "Adding to a group is instant; removing waits out the group's timer."
+            "Chaque application tierce doit figurer dans la Whitelist pour être accessible.",
+            "Pour ajouter une nouvelle app, appuyez sur '+ Demander une app'.",
+            "L'application est placée en quarantaine pendant 24h avant d'être débloquée (sas anti-impulsion).",
+            "Pendant ces 24 heures, l'application reste complètement inaccessible et masquée.",
+            "Retirer une application de la Whitelist est immédiat : elle est verrouillée sur-le-champ."
         ),
-        tip = "Android has no API to block a specific package from being installed, so this hides " +
-            "apps instead of refusing the install — same result, and it also works on apps that " +
-            "shipped with the ROM and cannot be uninstalled at all."
+        tip = "Ce système Zero-Trust offre une protection totale contre les contournements par ADB ou Play Store : même si une application est installée, elle est instantanément neutralisée tant qu'elle n'est pas approuvée."
     )
 
     private val HELP_NUCLEAR = HelpContent(
