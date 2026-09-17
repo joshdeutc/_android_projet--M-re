@@ -50,6 +50,7 @@ class MainActivity : Activity() {
     private lateinit var deviceOwnerStatusText: TextView
     private lateinit var periodBlocksContainer: LinearLayout
     private lateinit var installBlocksContainer: LinearLayout
+    private lateinit var requestWhitelistAppButton: Button
     private lateinit var partialAccessContainer: LinearLayout
 
     private lateinit var zoomCanvas: com.jo.selfcontrol.ultimate.ui.ZoomableCanvasView
@@ -262,13 +263,17 @@ class MainActivity : Activity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
-        installHeader.addView(android.widget.Button(this@MainActivity).apply {
-            text = "+ Demander une app (24h)"
+        requestWhitelistAppButton = android.widget.Button(this@MainActivity).apply {
+            val sec = WhitelistManager.getEffectiveQuarantineDelaySeconds(this@MainActivity)
+            val hours = WhitelistManager.getEffectiveQuarantineDelayHours(this@MainActivity)
+            val tag = if (sec >= 3600) "${hours}h" else "${sec / 60}m"
+            text = "+ Demander une app ($tag)"
             setTextColor(Color.WHITE)
             background = roundedBackground(Color.BLACK)
             setOnClickListener { showRequestWhitelistAppDialog() }
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-        })
+        }
+        installHeader.addView(requestWhitelistAppButton)
         installBlocklistCircle.addContent(sectionTitleWithHelp("App Whitelist", HELP_WHITELIST))
         installBlocklistCircle.addContent(installHeader)
         installBlocksContainer = createContainer()
@@ -1498,6 +1503,13 @@ class MainActivity : Activity() {
             installBlocklistCircle.setSummaryText("$allowedCount autorisées · $pendingCount en attente")
         } else {
             installBlocklistCircle.setSummaryText("$allowedCount apps autorisées")
+        }
+
+        if (::requestWhitelistAppButton.isInitialized) {
+            val reqSec = WhitelistManager.getEffectiveQuarantineDelaySeconds(this)
+            val reqHours = WhitelistManager.getEffectiveQuarantineDelayHours(this)
+            val reqTag = if (reqSec >= 3600) "${reqHours}h" else "${reqSec / 60}m"
+            requestWhitelistAppButton.text = "+ Demander une app ($reqTag)"
         }
 
         // Performance critical: do NOT build 400+ UI views if user is not looking inside this circle
@@ -2971,8 +2983,8 @@ class MainActivity : Activity() {
         steps = listOf(
             "Chaque application tierce doit figurer dans la Whitelist pour être accessible.",
             "Pour ajouter une nouvelle app, appuyez sur '+ Demander une app'.",
-            "L'application est placée en quarantaine pendant 24h avant d'être débloquée (sas anti-impulsion).",
-            "Pendant ces 24 heures, l'application reste complètement inaccessible et masquée.",
+            "L'application est placée en quarantaine pendant le délai configuré (ex. 12h ou 24h) avant d'être débloquée (sas anti-impulsion).",
+            "Pendant ce délai, l'application reste complètement inaccessible et masquée.",
             "Retirer une application de la Whitelist est immédiat : elle est verrouillée sur-le-champ."
         ),
         tip = "Ce système Zero-Trust offre une protection totale contre les contournements par ADB ou Play Store : même si une application est installée, elle est instantanément neutralisée tant qu'elle n'est pas approuvée."
