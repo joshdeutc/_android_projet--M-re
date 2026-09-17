@@ -37,6 +37,7 @@ class WatchdogReceiver : BroadcastReceiver() {
     }
 
     override fun onReceive(context: Context, intent: Intent?) {
+        WhitelistManager.checkAndPromotePendingRequests(context)
         if (!LimitService.isRunning) {
             Log.w(TAG, "LimitService not running — restarting!")
             LimitService.start(context)

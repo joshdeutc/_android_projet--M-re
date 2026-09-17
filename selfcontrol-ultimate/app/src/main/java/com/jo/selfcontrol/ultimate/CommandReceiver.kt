@@ -66,6 +66,8 @@ class CommandReceiver : BroadcastReceiver() {
             "com.jo.selfcontrol.ultimate.REQUEST_WHITELIST_APP" -> handleRequestWhitelistApp(context, intent)
             "com.jo.selfcontrol.ultimate.CANCEL_WHITELIST_APP" -> handleCancelWhitelistApp(context, intent)
             "com.jo.selfcontrol.ultimate.REMOVE_WHITELIST_APP" -> handleRemoveWhitelistApp(context, intent)
+            "com.jo.selfcontrol.ultimate.CHECK_WHITELIST_EXPIRATION" ->
+                WhitelistManager.checkAndPromotePendingRequests(context)
         }
     }
 

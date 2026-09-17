@@ -125,6 +125,7 @@ class LimitService : Service() {
             // Regularly check if pending delay actions should be applied
             DelayManager.applyPendingConfigsIfReady(this@LimitService)
             DelayManager.applyPendingDelayIfReady(this@LimitService)
+            WhitelistManager.checkAndPromotePendingRequests(this@LimitService)
             checkConfigReload()
             checkA11YReEnable()
 

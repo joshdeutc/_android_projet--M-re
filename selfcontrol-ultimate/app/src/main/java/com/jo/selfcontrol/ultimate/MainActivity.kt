@@ -1616,7 +1616,8 @@ class MainActivity : Activity() {
             })
 
             for (req in state.pendingRequests) {
-                val remainMs = (req.availableAt - now).coerceAtLeast(0L)
+                val remainMs = req.availableAt - now
+                if (remainMs <= 0L) continue
                 val remainHours = remainMs / 3600_000L
                 val remainMins = (remainMs % 3600_000L) / 60_000L
                 val timeStr = if (remainHours > 0) "${remainHours}h ${remainMins}m" else "${remainMins}m"

@@ -87,6 +87,7 @@
                 <action android:name="com.jo.selfcontrol.ultimate.REQUEST_WHITELIST_APP" />
                 <action android:name="com.jo.selfcontrol.ultimate.CANCEL_WHITELIST_APP" />
                 <action android:name="com.jo.selfcontrol.ultimate.REMOVE_WHITELIST_APP" />
+                <action android:name="com.jo.selfcontrol.ultimate.CHECK_WHITELIST_EXPIRATION" />
             </intent-filter>
         </receiver>
 

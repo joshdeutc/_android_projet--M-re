@@ -1,5 +1,6 @@
 package com.jo.selfcontrol.ultimate
 
+import android.app.AlarmManager
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -218,6 +219,11 @@ object WhitelistManager {
 
     @Synchronized
     fun loadState(ctx: Context): WhitelistState {
+        return checkAndPromotePendingRequests(ctx)
+    }
+
+    @Synchronized
+    fun loadStateInternal(ctx: Context): WhitelistState {
         val file = File(ctx.filesDir, STATE_FILE)
         if (!file.exists()) {
             val initialAllowed = getInitialAllowedPackages(ctx)
@@ -259,6 +265,134 @@ object WhitelistManager {
         } catch (e: Exception) {
             Log.e(TAG, "Error reading $STATE_FILE: ${e.message}", e)
             WhitelistState()
+        }
+    }
+
+    /**
+     * Checks if any pending requests or quarantine delay changes have expired.
+     * Automatically promotes ready applications to the whitelist, releases them
+     * from OS hide/suspend, and notifies the user.
+     */
+    @Synchronized
+    fun checkAndPromotePendingRequests(ctx: Context): WhitelistState {
+        var state = loadStateInternal(ctx)
+        if (!state.enabled) return state
+
+        val now = System.currentTimeMillis()
+        var modified = false
+
+        // 0. Check pending delay change
+        if (state.pendingDelayExecuteAt in 1..now && state.pendingDelayHours != null) {
+            val newHours = state.pendingDelayHours!!
+            val useGlobal = state.pendingDelayUseGlobal
+            state = state.copy(
+                quarantineDelayHours = newHours,
+                useGlobalDelay = useGlobal,
+                pendingDelayHours = null,
+                pendingDelayUseGlobal = false,
+                pendingDelayExecuteAt = 0L
+            )
+            modified = true
+            Log.w(TAG, "Applied pending whitelist delay change -> ${newHours}h (global=$useGlobal)")
+            EventLog.log(ctx, "WHITELIST", "Applied pending delay change: ${newHours}h (global=$useGlobal)")
+        }
+
+        // 1. Check pending requests that reached their unlock time
+        val ready = state.pendingRequests.filter { it.availableAt <= now }
+        if (ready.isNotEmpty()) {
+            val newlyAllowed = ready.map { it.packageName }.toSet()
+            val updatedPending = state.pendingRequests.filter { it.availableAt > now }
+            val updatedAllowed = state.allowedPackages + newlyAllowed
+            state = state.copy(allowedPackages = updatedAllowed, pendingRequests = updatedPending)
+            modified = true
+            Log.w(TAG, "Pending whitelist delay completed for: $newlyAllowed -> Added to whitelist")
+            EventLog.log(ctx, "WHITELIST", "Quarantine delay expired: added $newlyAllowed to whitelist")
+
+            // Release the packages immediately: unhide + unsuspend + remove from blockedApps
+            val hidden = loadHiddenState(ctx).toMutableSet()
+            for (pkg in newlyAllowed) {
+                release(ctx, pkg)
+                hidden.remove(pkg)
+                notifyAppUnlocked(ctx, pkg)
+            }
+            saveHiddenState(ctx, hidden)
+        }
+
+        if (modified) {
+            saveState(ctx, state)
+        }
+
+        scheduleNextUnlockAlarm(ctx)
+        return state
+    }
+
+    fun scheduleNextUnlockAlarm(ctx: Context) {
+        val state = loadStateInternal(ctx)
+        val now = System.currentTimeMillis()
+        val nextPending = state.pendingRequests.map { it.availableAt }.filter { it > now }.minOrNull()
+        val nextDelay = if (state.pendingDelayExecuteAt > now) state.pendingDelayExecuteAt else null
+
+        val candidateTimes = listOfNotNull(nextPending, nextDelay)
+        if (candidateTimes.isEmpty()) return
+        val targetTime = candidateTimes.min()
+
+        try {
+            val am = ctx.getSystemService(Context.ALARM_SERVICE) as? AlarmManager ?: return
+            val intent = Intent(ctx, CommandReceiver::class.java).apply {
+                action = "com.jo.selfcontrol.ultimate.CHECK_WHITELIST_EXPIRATION"
+            }
+            val pi = PendingIntent.getBroadcast(
+                ctx,
+                8888,
+                intent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+                am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, targetTime, pi)
+            } else {
+                am.setExact(AlarmManager.RTC_WAKEUP, targetTime, pi)
+            }
+            Log.i(TAG, "Scheduled whitelist unlock alarm for ${java.util.Date(targetTime)}")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to schedule unlock alarm: ${e.message}")
+        }
+    }
+
+    fun notifyAppUnlocked(ctx: Context, pkg: String) {
+        try {
+            ensureNotificationChannel(ctx)
+            val nm = ctx.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
+            val appLabel = try {
+                val ai = ctx.packageManager.getApplicationInfo(pkg, PackageManager.MATCH_UNINSTALLED_PACKAGES)
+                ctx.packageManager.getApplicationLabel(ai).toString()
+            } catch (e: Exception) {
+                pkg.substringAfterLast('.')
+            }
+
+            val launchIntent = ctx.packageManager.getLaunchIntentForPackage(pkg) ?: Intent(ctx, MainActivity::class.java)
+            val pi = PendingIntent.getActivity(
+                ctx,
+                pkg.hashCode() + 2,
+                launchIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+
+            val notif = NotificationCompat.Builder(ctx, NOTIF_CHANNEL_ID)
+                .setSmallIcon(android.R.drawable.ic_dialog_info)
+                .setContentTitle("🎉 Application autorisée : $appLabel")
+                .setContentText("Le délai de quarantaine est terminé. L'application est utilisable.")
+                .setStyle(NotificationCompat.BigTextStyle().bigText(
+                    "L'application \"$appLabel\" a terminé sa période de quarantaine.\n" +
+                    "Elle a été intégrée à la Whitelist et est maintenant débloquée et visible !"
+                ))
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setAutoCancel(true)
+                .setContentIntent(pi)
+                .build()
+
+            nm.notify(300000 + pkg.hashCode(), notif)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to post unlocked notification for $pkg: ${e.message}")
         }
     }
 
@@ -459,40 +593,10 @@ object WhitelistManager {
      * Promotes expired pending requests, unhides newly allowed apps, and locks unauthorized apps.
      */
     fun enforce(ctx: Context) {
-        var state = loadState(ctx)
+        val state = checkAndPromotePendingRequests(ctx)
         if (!state.enabled) return
 
-        val now = System.currentTimeMillis()
-
-        // 0. Check if a pending delay change reached its execution time
-        if (state.pendingDelayExecuteAt in 1..now && state.pendingDelayHours != null) {
-            val newHours = state.pendingDelayHours!!
-            val useGlobal = state.pendingDelayUseGlobal
-            state = state.copy(
-                quarantineDelayHours = newHours,
-                useGlobalDelay = useGlobal,
-                pendingDelayHours = null,
-                pendingDelayUseGlobal = false,
-                pendingDelayExecuteAt = 0L
-            )
-            saveState(ctx, state)
-            Log.w(TAG, "Applied pending whitelist delay change -> ${newHours}h (global=$useGlobal)")
-            EventLog.log(ctx, "WHITELIST", "Applied pending delay change: ${newHours}h (global=$useGlobal)")
-        }
-
-        // 1. Check for pending requests that reached their unlock time
-        val ready = state.pendingRequests.filter { it.availableAt <= now }
-        if (ready.isNotEmpty()) {
-            val newlyAllowed = ready.map { it.packageName }.toSet()
-            val updatedPending = state.pendingRequests.filter { it.availableAt > now }
-            val updatedAllowed = state.allowedPackages + newlyAllowed
-            state = state.copy(allowedPackages = updatedAllowed, pendingRequests = updatedPending)
-            saveState(ctx, state)
-            Log.w(TAG, "Pending whitelist delay completed for: $newlyAllowed -> Added to whitelist")
-            EventLog.log(ctx, "WHITELIST", "Quarantine delay expired: added $newlyAllowed to whitelist")
-        }
-
-        // 2. Un-hide / release any packages that are now allowed OR are system/guarded apps
+        // 1. Un-hide / release any packages that are now allowed OR are system/guarded apps
         val hidden = loadHiddenState(ctx).toMutableSet()
         val toRelease = hidden.filter { pkg ->
             pkg in state.allowedPackages || isGuarded(ctx, pkg)
@@ -503,7 +607,7 @@ object WhitelistManager {
             Log.i(TAG, "Released guarded/allowed app: $pkg")
         }
 
-        // 3. Scan installed packages
+        // 2. Scan installed packages
         val pm = ctx.packageManager
         val installed = try {
             pm.getInstalledPackages(PackageManager.MATCH_UNINSTALLED_PACKAGES)
@@ -676,6 +780,7 @@ object WhitelistManager {
         val availableAt = now + delaySeconds * 1000L
         val newPending = state.pendingRequests + PendingRequest(cleanPkg, now, availableAt)
         saveState(ctx, state.copy(pendingRequests = newPending))
+        scheduleNextUnlockAlarm(ctx)
         val hours = delaySeconds / 3600L
         Log.w(TAG, "Added $cleanPkg to quarantine. Available in ${delaySeconds}s / ${hours}h (at ${java.util.Date(availableAt)})")
         EventLog.log(ctx, "WHITELIST", "Requested $cleanPkg addition with ${delaySeconds}s delay")
@@ -713,6 +818,7 @@ object WhitelistManager {
         val filtered = state.pendingRequests.filterNot { it.packageName == cleanPkg }
         if (filtered.size != state.pendingRequests.size) {
             saveState(ctx, state.copy(pendingRequests = filtered))
+            scheduleNextUnlockAlarm(ctx)
             Log.w(TAG, "Canceled pending whitelist request for $cleanPkg")
             EventLog.log(ctx, "WHITELIST", "Canceled pending request for $cleanPkg")
             return true
