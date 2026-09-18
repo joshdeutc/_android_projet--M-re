@@ -634,33 +634,41 @@ class MainActivity : Activity() {
                             ViewGroup.LayoutParams.WRAP_CONTENT
                         ).apply { bottomMargin = dp(8) }
 
+                        // Show detailed diff and descriptive title
+                        val pendingConfig = ConfigManager.fromJsonString(update.newLimitsJson)
+                        val currentConfig = ConfigManager.loadConfig(this@MainActivity)
+                        val diffLines = if (pendingConfig != null) describeConfigDiff(currentConfig, pendingConfig) else emptyList()
+
+                        val cardTitle = when {
+                            update.description.isNotBlank() && update.description != "Update config" && update.description != "Mise à jour configuration" -> update.description
+                            diffLines.isNotEmpty() -> {
+                                val firstItem = diffLines.firstOrNull { it.trim().startsWith("•") || it.trim().startsWith("[") }
+                                    ?: diffLines.first()
+                                firstItem.trim().removePrefix("•").removePrefix("  •").trim()
+                            }
+                            pendingConfig?.limits?.isNotEmpty() == true -> {
+                                val appNames = pendingConfig.limits.joinToString(", ") { getAppName(it.packageName) }
+                                "Limite : $appNames"
+                            }
+                            pendingConfig?.periodBlocks?.isNotEmpty() == true -> "Couvre-feu"
+                            pendingConfig?.installBlocks?.isNotEmpty() == true -> "Bloqueur d'installation"
+                            else -> "Modification en attente"
+                        }
+
                         addView(TextView(this@MainActivity).apply {
-                            text = "📝 Pending Change — ${formatTime(remaining)}"
+                            text = "📝 $cardTitle — ${formatTime(remaining)}"
                             setTextColor(Color.BLACK)
                             textSize = 14f
                             typeface = Typeface.DEFAULT_BOLD
                         })
 
-                        // Show detailed diff if possible
-                        val pendingConfig = ConfigManager.fromJsonString(update.newLimitsJson)
-                        val currentConfig = ConfigManager.loadConfig(this@MainActivity)
-                        if (pendingConfig != null) {
-                            val diffLines = describeConfigDiff(currentConfig, pendingConfig)
-                            if (diffLines.isNotEmpty()) {
-                                addView(TextView(this@MainActivity).apply {
-                                    text = diffLines.joinToString("\n")
-                                    setTextColor(Color.BLACK)
-                                    textSize = 13f
-                                    setPadding(0, dp(6), 0, dp(6))
-                                })
-                            } else {
-                                addView(TextView(this@MainActivity).apply {
-                                    text = update.description
-                                    setTextColor(Color.BLACK)
-                                    textSize = 13f
-                                    setPadding(0, dp(4), 0, dp(4))
-                                })
-                            }
+                        if (diffLines.isNotEmpty()) {
+                            addView(TextView(this@MainActivity).apply {
+                                text = diffLines.joinToString("\n")
+                                setTextColor(Color.BLACK)
+                                textSize = 13f
+                                setPadding(0, dp(6), 0, dp(6))
+                            })
                         } else {
                             addView(TextView(this@MainActivity).apply {
                                 text = update.description
@@ -809,128 +817,31 @@ class MainActivity : Activity() {
             }
         }
 
-        // ── Visualiseur des Délais Configurés ──
+        // ── Bouton vers la Vue d'ensemble des délais ──
         val configuredDelays = DelayManager.getConfiguredDelays(this)
-        val maxDelaySec = configuredDelays.maxOfOrNull { it.delaySeconds }?.coerceAtLeast(1L) ?: 1L
+        val dedicatedCount = configuredDelays.count { !it.isGlobal }
         val eligibility = DelayManager.checkUninstallEligibility(this)
 
-        val visualizerCard = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(14), dp(12), dp(14), dp(12))
-            background = roundedBackground(Color.parseColor("#1A202C"))
+        val overviewBtn = Button(this).apply {
+            text = if (dedicatedCount > 0) {
+                "📊 Vue d'ensemble des délais ($dedicatedCount dédié${if (dedicatedCount > 1) "s" else ""})"
+            } else {
+                "📊 Vue d'ensemble des délais (Tous alignés)"
+            }
+            textSize = 14f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.WHITE)
+            background = roundedBackground(Color.parseColor("#2A3447"))
             val lp = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
             ).apply { topMargin = dp(16); bottomMargin = dp(8) }
             layoutParams = lp
-
-            // Header row
-            addView(TextView(this@MainActivity).apply {
-                text = "📊 Vue d'ensemble des délais"
-                textSize = 14f
-                typeface = Typeface.DEFAULT_BOLD
-                setTextColor(Color.parseColor("#E0E6ED"))
-                setPadding(0, 0, 0, dp(10))
-            })
-
-            // Items in descending order
-            for (item in configuredDelays) {
-                val itemRow = LinearLayout(this@MainActivity).apply {
-                    orientation = LinearLayout.VERTICAL
-                    layoutParams = LinearLayout.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT,
-                        ViewGroup.LayoutParams.WRAP_CONTENT
-                    ).apply { bottomMargin = dp(8) }
-
-                    // Title & duration text
-                    val infoRow = LinearLayout(this@MainActivity).apply {
-                        orientation = LinearLayout.HORIZONTAL
-                        gravity = Gravity.CENTER_VERTICAL
-                        layoutParams = LinearLayout.LayoutParams(
-                            ViewGroup.LayoutParams.MATCH_PARENT,
-                            ViewGroup.LayoutParams.WRAP_CONTENT
-                        )
-
-                        addView(TextView(this@MainActivity).apply {
-                            text = item.title
-                            textSize = 13f
-                            setTextColor(Color.WHITE)
-                            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-                        })
-
-                        val durationStr = if (item.delaySeconds <= 0L) {
-                            "0m (Aucun)"
-                        } else {
-                            val h = item.delaySeconds / 3600L
-                            val m = (item.delaySeconds % 3600L) / 60L
-                            if (h > 0L) "${h}h${if (m > 0L) " ${m}m" else ""}" else "${m}m"
-                        }
-                        addView(TextView(this@MainActivity).apply {
-                            text = durationStr
-                            textSize = 12f
-                            typeface = Typeface.DEFAULT_BOLD
-                            setTextColor(if (item.delaySeconds == 0L) Color.parseColor("#4CAF50") else Color.parseColor("#FFCA28"))
-                        })
-                    }
-                    addView(infoRow)
-
-                    // Minimalist horizontal bar
-                    val barContainer = LinearLayout(this@MainActivity).apply {
-                        orientation = LinearLayout.HORIZONTAL
-                        background = roundedBackground(Color.parseColor("#2D3748"))
-                        val bLp = LinearLayout.LayoutParams(
-                            ViewGroup.LayoutParams.MATCH_PARENT,
-                            dp(6)
-                        ).apply { topMargin = dp(4) }
-                        layoutParams = bLp
-                    }
-
-                    val ratio = if (maxDelaySec > 0L && item.delaySeconds > 0L) {
-                        (item.delaySeconds.toFloat() / maxDelaySec.toFloat()).coerceIn(0.05f, 1f)
-                    } else 0f
-
-                    if (ratio > 0f) {
-                        val barFill = View(this@MainActivity).apply {
-                            background = roundedBackground(
-                                if (item.isGlobal) Color.parseColor("#00E5FF") else Color.parseColor("#FF9800")
-                            )
-                            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, ratio)
-                        }
-                        barContainer.addView(barFill)
-                        if (ratio < 1f) {
-                            val barEmpty = View(this@MainActivity).apply {
-                                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f - ratio)
-                            }
-                            barContainer.addView(barEmpty)
-                        }
-                    } else {
-                        // 0 seconds bar: slight green indicator
-                        val zeroFill = View(this@MainActivity).apply {
-                            background = roundedBackground(Color.parseColor("#4CAF50"))
-                            layoutParams = LinearLayout.LayoutParams(dp(16), ViewGroup.LayoutParams.MATCH_PARENT)
-                        }
-                        barContainer.addView(zeroFill)
-                    }
-                    addView(barContainer)
-                }
-                addView(itemRow)
+            setOnClickListener {
+                showDelaysOverviewDialog()
             }
-
-            // Status message at bottom of visualizer card
-            val statusText = TextView(this@MainActivity).apply {
-                textSize = 12f
-                setPadding(0, dp(6), 0, 0)
-                if (eligibility.first) {
-                    text = "🟢 Prêt : aucun délai personnalisé et délai général à 0."
-                    setTextColor(Color.parseColor("#4CAF50"))
-                } else {
-                    text = "🔒 Désinstallation verrouillée :\n${eligibility.second}"
-                    setTextColor(Color.parseColor("#FF9800"))
-                }
-            }
-            addView(statusText)
         }
-        delayContainer.addView(visualizerCard)
+        delayContainer.addView(overviewBtn)
 
         // Settings Unlock UI
         if (delayState.unlockSettingsUnlockTime > 0) {
@@ -999,6 +910,150 @@ class MainActivity : Activity() {
                 }
             })
         }
+    }
+
+    private fun showDelaysOverviewDialog() {
+        val configuredDelays = DelayManager.getConfiguredDelays(this)
+        val maxDelaySec = configuredDelays.maxOfOrNull { it.delaySeconds }?.coerceAtLeast(1L) ?: 1L
+        val eligibility = DelayManager.checkUninstallEligibility(this)
+
+        val scroll = ScrollView(this)
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(16), dp(20), dp(16))
+        }
+        scroll.addView(content)
+
+        // Subtitle explanation
+        content.addView(TextView(this).apply {
+            text = "Vue d'ensemble de tous les délais actifs et configurés sur l'appareil (ordre décroissant) :"
+            textSize = 13f
+            setTextColor(Color.parseColor("#AAAAAA"))
+            setPadding(0, 0, 0, dp(14))
+        })
+
+        // Items list
+        for (item in configuredDelays) {
+            val itemRow = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(12), dp(10), dp(12), dp(10))
+                background = roundedBackground(Color.parseColor("#1E2430"))
+                val lp = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { bottomMargin = dp(8) }
+                layoutParams = lp
+            }
+
+            // Title & duration
+            val infoRow = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                )
+
+                addView(TextView(this@MainActivity).apply {
+                    text = item.title
+                    textSize = 14f
+                    typeface = Typeface.DEFAULT_BOLD
+                    setTextColor(Color.WHITE)
+                    layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                })
+
+                addView(TextView(this@MainActivity).apply {
+                    val durationStr = if (item.delaySeconds <= 0L) {
+                        "0m (Aucun)"
+                    } else {
+                        DelayManager.formatDuration(item.delaySeconds)
+                    }
+                    text = durationStr
+                    textSize = 13f
+                    typeface = Typeface.DEFAULT_BOLD
+                    setTextColor(if (item.delaySeconds == 0L) Color.parseColor("#4CAF50") else Color.parseColor("#FFCA28"))
+                })
+            }
+            itemRow.addView(infoRow)
+
+            // Minimalist horizontal bar
+            val barContainer = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                background = roundedBackground(Color.parseColor("#2D3748"))
+                val bLp = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    dp(8)
+                ).apply { topMargin = dp(6) }
+                layoutParams = bLp
+            }
+
+            val ratio = if (maxDelaySec > 0L && item.delaySeconds > 0L) {
+                (item.delaySeconds.toFloat() / maxDelaySec.toFloat()).coerceIn(0.05f, 1f)
+            } else 0f
+
+            if (ratio > 0f) {
+                val barFill = View(this).apply {
+                    background = roundedBackground(
+                        if (item.isGlobal) Color.parseColor("#00E5FF") else Color.parseColor("#FF9800")
+                    )
+                    layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, ratio)
+                }
+                barContainer.addView(barFill)
+                if (ratio < 1f) {
+                    val barEmpty = View(this).apply {
+                        layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f - ratio)
+                    }
+                    barContainer.addView(barEmpty)
+                }
+            } else {
+                val zeroFill = View(this).apply {
+                    background = roundedBackground(Color.parseColor("#4CAF50"))
+                    layoutParams = LinearLayout.LayoutParams(dp(16), ViewGroup.LayoutParams.MATCH_PARENT)
+                }
+                barContainer.addView(zeroFill)
+            }
+            itemRow.addView(barContainer)
+            content.addView(itemRow)
+        }
+
+        // Status Card at bottom
+        val statusCard = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(14), dp(12), dp(14), dp(12))
+            background = roundedBackground(
+                if (eligibility.first) Color.parseColor("#1B3320") else Color.parseColor("#33241B")
+            )
+            val lp = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = dp(12) }
+            layoutParams = lp
+
+            addView(TextView(this@MainActivity).apply {
+                text = if (eligibility.first) "🟢 Statut Désinstallation : Éligible" else "🔒 Statut Désinstallation : Verrouillé"
+                textSize = 14f
+                typeface = Typeface.DEFAULT_BOLD
+                setTextColor(if (eligibility.first) Color.parseColor("#81C784") else Color.parseColor("#FFB74D"))
+            })
+
+            addView(TextView(this@MainActivity).apply {
+                text = if (eligibility.first) {
+                    "Tous les modules sont alignés sur le délai général et le délai général est réglé à 0. Vous pouvez demander le déverrouillage pour désinstaller l'application."
+                } else {
+                    eligibility.second ?: "Conditions non remplies."
+                }
+                textSize = 12f
+                setTextColor(Color.parseColor("#E0E0E0"))
+                setPadding(0, dp(4), 0, 0)
+            })
+        }
+        content.addView(statusCard)
+
+        AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog)
+            .setTitle("📊 Vue d'ensemble des délais")
+            .setView(scroll)
+            .setPositiveButton("Fermer", null)
+            .show()
     }
 
     private fun showChangeDelayDialog() {
@@ -2202,25 +2257,67 @@ class MainActivity : Activity() {
     }
 
     private fun describeConfigChange(old: ConfigManager.Config, newConfig: ConfigManager.Config): String {
-        val diffLines = describeConfigDiff(old, newConfig)
-        if (diffLines.isNotEmpty()) {
-            return diffLines.joinToString("; ")
+        // App limits changes
+        val oldLimits = old.limits.associateBy { it.packageName }
+        val newLimits = newConfig.limits.associateBy { it.packageName }
+        val allPkgs = (oldLimits.keys + newLimits.keys).toSortedSet()
+        for (pkg in allPkgs) {
+            val o = oldLimits[pkg]
+            val n = newLimits[pkg]
+            val name = getAppName(pkg)
+            if (o == null && n != null) return "Ajout limite : $name"
+            if (o != null && n == null) return "Suppr. limite : $name"
+            if (o != null && n != null && o != n) {
+                if (o.protectionDelaySec != n.protectionDelaySec) {
+                    val target = n.protectionDelaySec?.let { DelayManager.formatDuration(it.toLong()) } ?: "Global"
+                    return "Délai protection: $name (→ $target)"
+                }
+                if (o.maxMinutesPerDay != n.maxMinutesPerDay) {
+                    return "Limite $name: ${o.maxMinutesPerDay}m → ${n.maxMinutesPerDay}m"
+                }
+                return "Modifier limite : $name"
+            }
         }
 
-        val oldPkgs = old.limits.map { it.packageName }.toSet()
-        val newPkgs = newConfig.limits.map { it.packageName }.toSet()
+        // Curfews
+        if (newConfig.periodBlocks.size > old.periodBlocks.size) return "Nouveau couvre-feu"
+        if (newConfig.periodBlocks.size < old.periodBlocks.size) return "Suppr. couvre-feu"
+        for (i in 0 until minOf(old.periodBlocks.size, newConfig.periodBlocks.size)) {
+            val o = old.periodBlocks[i]
+            val n = newConfig.periodBlocks[i]
+            if (o != n) {
+                val apps = n.packages.take(2).joinToString(", ") { getAppName(it) }
+                if (o.protectionDelaySec != n.protectionDelaySec) {
+                    val target = n.protectionDelaySec?.let { DelayManager.formatDuration(it.toLong()) } ?: "Global"
+                    return "Délai protection: Couvre-feu (→ $target)"
+                }
+                return "Modifier couvre-feu ($apps)"
+            }
+        }
 
-        val removed = oldPkgs - newPkgs
-        if (removed.size == 1) return "Delete timer: ${getAppName(removed.first())}"
-        if (removed.size > 1) return "Delete ${removed.size} timers"
+        // Install blocks
+        val oldGroups = old.installBlocks.associateBy { it.name }
+        val newGroups = newConfig.installBlocks.associateBy { it.name }
+        for (g in newConfig.installBlocks) {
+            val og = oldGroups[g.name]
+            if (og == null) return "Ajout bloqueur : ${g.name}"
+            if (og != g) {
+                if (og.protectionDelaySec != g.protectionDelaySec) {
+                    val target = g.protectionDelaySec?.let { DelayManager.formatDuration(it.toLong()) } ?: "Global"
+                    return "Délai protection: ${g.name} (→ $target)"
+                }
+                return "Modifier bloqueur : ${g.name}"
+            }
+        }
+        for (og in old.installBlocks) {
+            if (newGroups[og.name] == null) return "Suppr. bloqueur : ${og.name}"
+        }
 
-        val added = newPkgs - oldPkgs
-        if (added.size == 1) return "Add timer: ${getAppName(added.first())}"
+        val diffLines = describeConfigDiff(old, newConfig)
+        val meaningful = diffLines.firstOrNull { it.trim().startsWith("•") || it.trim().startsWith("[") }
+        if (meaningful != null) return meaningful.trim().removePrefix("•").removePrefix("  •").trim()
 
-        if (newConfig.periodBlocks.size > old.periodBlocks.size) return "Add curfew rule"
-        if (newConfig.periodBlocks.size < old.periodBlocks.size) return "Delete curfew rule"
-
-        return "Update config"
+        return "Mise à jour configuration"
     }
 
     private fun describeConfigDiff(current: ConfigManager.Config, pending: ConfigManager.Config): List<String> {
@@ -2237,22 +2334,29 @@ class MainActivity : Activity() {
             val name = getAppName(pkg)
             when {
                 old == null && new != null -> {
-                    limitChanges.add("  \u2022 [NEW] $name: ${new.maxMinutesPerDay}m/day")
-                    new.session?.let { limitChanges.add("    \u21b3 session: ${it.sessionDurationSec/60}m, cooldown ${it.cooldownSec/60}m, max ${it.maxSessionsPerDay}/day") }
+                    limitChanges.add("  • [NOUVEAU] $name: ${new.maxMinutesPerDay}m/jour")
+                    new.session?.let { limitChanges.add("    ↳ session: ${it.sessionDurationSec/60}m, cooldown ${it.cooldownSec/60}m, max ${it.maxSessionsPerDay}/j") }
+                    new.protectionDelaySec?.let { limitChanges.add("    ↳ délai protection: ${DelayManager.formatDuration(it.toLong())}") }
                 }
                 old != null && new == null ->
-                    limitChanges.add("  \u2022 [REMOVED] $name")
+                    limitChanges.add("  • [SUPPRIMÉ] $name")
                 old != null && new != null -> {
                     if (old.maxMinutesPerDay != new.maxMinutesPerDay) {
-                        limitChanges.add("  \u2022 $name: ${old.maxMinutesPerDay}m/day \u2192 ${new.maxMinutesPerDay}m/day")
+                        limitChanges.add("  • $name: ${old.maxMinutesPerDay}m/jour → ${new.maxMinutesPerDay}m/jour")
                     }
                     val sessionDesc = describeSessionDiff(name, old.session, new.session)
                     if (sessionDesc != null) limitChanges.add(sessionDesc)
+
+                    if (old.protectionDelaySec != new.protectionDelaySec) {
+                        val oldProt = old.protectionDelaySec?.let { DelayManager.formatDuration(it.toLong()) } ?: "Global"
+                        val newProt = new.protectionDelaySec?.let { DelayManager.formatDuration(it.toLong()) } ?: "Global"
+                        limitChanges.add("  • $name délai protection: $oldProt → $newProt")
+                    }
                 }
             }
         }
         if (limitChanges.isNotEmpty()) {
-            lines.add("App Limits:")
+            lines.add("Limites d'applications :")
             lines.addAll(limitChanges)
         }
 
@@ -2269,7 +2373,25 @@ class MainActivity : Activity() {
                 val apps = n.packages.joinToString(", ") { getAppName(it) }
                 val start = "%02d:%02d".format(n.blockedStartMinutes / 60, n.blockedStartMinutes % 60)
                 val end = "%02d:%02d".format(n.blockedEndMinutes / 60, n.blockedEndMinutes % 60)
-                curfewChanges.add("  \u2022 [MODIFIED] $apps $start\u2192$end (${formatDays(n.allowedDays)})")
+                val changes = mutableListOf<String>()
+                if (o.blockedStartMinutes != n.blockedStartMinutes || o.blockedEndMinutes != n.blockedEndMinutes) {
+                    val oldStart = "%02d:%02d".format(o.blockedStartMinutes / 60, o.blockedStartMinutes % 60)
+                    val oldEnd = "%02d:%02d".format(o.blockedEndMinutes / 60, o.blockedEndMinutes % 60)
+                    changes.add("horaires: $oldStart-$oldEnd → $start-$end")
+                }
+                if (o.allowedDays != n.allowedDays) {
+                    changes.add("jours: ${formatDays(o.allowedDays)} → ${formatDays(n.allowedDays)}")
+                }
+                if (o.packages != n.packages) {
+                    changes.add("apps: $apps")
+                }
+                if (o.protectionDelaySec != n.protectionDelaySec) {
+                    val oldProt = o.protectionDelaySec?.let { DelayManager.formatDuration(it.toLong()) } ?: "Global"
+                    val newProt = n.protectionDelaySec?.let { DelayManager.formatDuration(it.toLong()) } ?: "Global"
+                    changes.add("délai: $oldProt → $newProt")
+                }
+                val detail = if (changes.isNotEmpty()) changes.joinToString(", ") else "$start→$end (${formatDays(n.allowedDays)})"
+                curfewChanges.add("  • [MODIF] Couvre-feu ($apps): $detail")
             }
         }
         // Added rules
@@ -2279,7 +2401,7 @@ class MainActivity : Activity() {
                 val apps = r.packages.joinToString(", ") { getAppName(it) }
                 val start = "%02d:%02d".format(r.blockedStartMinutes / 60, r.blockedStartMinutes % 60)
                 val end = "%02d:%02d".format(r.blockedEndMinutes / 60, r.blockedEndMinutes % 60)
-                curfewChanges.add("  \u2022 [NEW] $apps blocked $start\u2192$end (${formatDays(r.allowedDays)})")
+                curfewChanges.add("  • [NOUVEAU] Couvre-feu $apps $start→$end (${formatDays(r.allowedDays)})")
             }
         }
         // Removed rules
@@ -2287,13 +2409,54 @@ class MainActivity : Activity() {
             for (i in newRules.size until oldRules.size) {
                 val r = oldRules[i]
                 val apps = r.packages.joinToString(", ") { getAppName(it) }
-                curfewChanges.add("  \u2022 [REMOVED] $apps curfew")
+                curfewChanges.add("  • [SUPPRIMÉ] Couvre-feu $apps")
             }
         }
 
         if (curfewChanges.isNotEmpty()) {
-            lines.add("Curfew Rules:")
+            lines.add("Couvre-feux :")
             lines.addAll(curfewChanges)
+        }
+
+        // Install Blocks diff
+        val oldGroups = current.installBlocks.associateBy { it.name }
+        val newGroups = pending.installBlocks.associateBy { it.name }
+        val allGroupNames = (oldGroups.keys + newGroups.keys).toSortedSet()
+        val installChanges = mutableListOf<String>()
+
+        for (name in allGroupNames) {
+            val oldG = oldGroups[name]
+            val newG = newGroups[name]
+            when {
+                oldG == null && newG != null -> {
+                    installChanges.add("  • [NOUVEAU] Bloqueur $name (${newG.packages.size} apps)")
+                }
+                oldG != null && newG == null -> {
+                    installChanges.add("  • [SUPPRIMÉ] Bloqueur $name")
+                }
+                oldG != null && newG != null -> {
+                    val changes = mutableListOf<String>()
+                    if (oldG.packages != newG.packages) {
+                        val added = newG.packages - oldG.packages.toSet()
+                        val removed = oldG.packages - newG.packages.toSet()
+                        if (added.isNotEmpty()) changes.add("+${added.size} apps")
+                        if (removed.isNotEmpty()) changes.add("-${removed.size} apps")
+                    }
+                    if (oldG.protectionDelaySec != newG.protectionDelaySec) {
+                        val oldProt = oldG.protectionDelaySec?.let { DelayManager.formatDuration(it.toLong()) } ?: "Global"
+                        val newProt = newG.protectionDelaySec?.let { DelayManager.formatDuration(it.toLong()) } ?: "Global"
+                        changes.add("délai: $oldProt → $newProt")
+                    }
+                    if (changes.isNotEmpty()) {
+                        installChanges.add("  • Bloqueur $name: ${changes.joinToString(", ")}")
+                    }
+                }
+            }
+        }
+
+        if (installChanges.isNotEmpty()) {
+            lines.add("Bloqueurs d'installation :")
+            lines.addAll(installChanges)
         }
 
         return lines
@@ -2875,10 +3038,12 @@ class MainActivity : Activity() {
     }
 
     private fun formatTime(seconds: Int): String {
-        val h = seconds / 3600
+        val d = seconds / 86400
+        val h = (seconds % 86400) / 3600
         val m = (seconds % 3600) / 60
         val s = seconds % 60
         return when {
+            d > 0 -> "${d}j ${h}h${m.toString().padStart(2, '0')}m${s.toString().padStart(2, '0')}s"
             h > 0 -> "${h}h${m.toString().padStart(2, '0')}m${s.toString().padStart(2, '0')}s"
             m > 0 -> "${m}m${s.toString().padStart(2, '0')}s"
             else -> "${s}s"

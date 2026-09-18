@@ -262,20 +262,32 @@ object DelayManager {
 
     fun formatDuration(seconds: Long): String {
         if (seconds <= 0L) return "0s"
-        val h = seconds / 3600L
+        val d = seconds / 86400L
+        val h = (seconds % 86400L) / 3600L
         val m = (seconds % 3600L) / 60L
         val s = seconds % 60L
         return when {
+            d > 0L -> if (h > 0L) "${d}j ${h}h" else "${d}j"
             h > 0L -> if (m > 0L) "${h}h ${m}m" else "${h}h"
             m > 0L -> if (s > 0L) "${m}m ${s}s" else "${m}m"
             else -> "${s}s"
         }
     }
 
+    private fun getAppLabel(context: Context, pkg: String): String {
+        return try {
+            val pm = context.packageManager
+            val ai = pm.getApplicationInfo(pkg, 0)
+            pm.getApplicationLabel(ai).toString()
+        } catch (e: Exception) {
+            pkg.substringAfterLast('.').replaceFirstChar { it.uppercase() }
+        }
+    }
+
     /**
      * Returns the list of all configured delays in the system:
      * - The general delay (always included)
-     * - Any module with a dedicated delay (if NOT aligned on global delay)
+     * - Any module or rule with a dedicated protection delay (if NOT aligned on global delay)
      * Sorted in descending order of duration.
      */
     fun getConfiguredDelays(context: Context): List<ConfiguredDelayItem> {
@@ -288,7 +300,7 @@ object DelayManager {
                 title = "🌐 Délai Général",
                 delaySeconds = globalSec,
                 isGlobal = true,
-                description = if (globalSec == 0L) "Aucun délai" else formatDuration(globalSec)
+                description = if (globalSec == 0L) "Aucun délai (0s)" else formatDuration(globalSec)
             )
         )
 
@@ -310,13 +322,89 @@ object DelayManager {
             Log.e(TAG, "Error reading Whitelist delay: ${e.message}")
         }
 
+        // 3. Règles ConfigManager (Limites d'apps, Couvre-feux, Bloqueurs d'installation)
+        try {
+            val config = ConfigManager.loadConfig(context)
+
+            // Limites d'applications
+            for (limit in config.limits) {
+                val sec = limit.protectionDelaySec
+                if (sec != null && sec > 0) {
+                    val appName = getAppLabel(context, limit.packageName)
+                    list.add(
+                        ConfiguredDelayItem(
+                            title = "📱 Limite : $appName",
+                            delaySeconds = sec.toLong(),
+                            isGlobal = false,
+                            description = formatDuration(sec.toLong())
+                        )
+                    )
+                }
+            }
+
+            // Couvre-feux (Curfews)
+            for ((idx, rule) in config.periodBlocks.withIndex()) {
+                val sec = rule.protectionDelaySec
+                if (sec != null && sec > 0) {
+                    val targetApps = rule.packages.take(2).joinToString(", ") { getAppLabel(context, it) }
+                    val more = if (rule.packages.size > 2) " (+${rule.packages.size - 2})" else ""
+                    val label = if (targetApps.isNotBlank()) "🌙 Couvre-feu ($targetApps$more)" else "🌙 Couvre-feu #${idx + 1}"
+                    list.add(
+                        ConfiguredDelayItem(
+                            title = label,
+                            delaySeconds = sec.toLong(),
+                            isGlobal = false,
+                            description = formatDuration(sec.toLong())
+                        )
+                    )
+                }
+            }
+
+            // Groupes d'installation
+            for (group in config.installBlocks) {
+                val sec = group.protectionDelaySec
+                if (sec != null && sec > 0) {
+                    list.add(
+                        ConfiguredDelayItem(
+                            title = "🚫 Bloqueur : ${group.name}",
+                            delaySeconds = sec.toLong(),
+                            isGlobal = false,
+                            description = formatDuration(sec.toLong())
+                        )
+                    )
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error reading ConfigManager delays: ${e.message}")
+        }
+
+        // 4. Règles d'écran (ScreenRuleManager)
+        try {
+            val screenRules = ScreenRuleManager.load(context)
+            for (r in screenRules) {
+                val sec = r.protectionDelaySec
+                if (sec != null && sec > 0) {
+                    list.add(
+                        ConfiguredDelayItem(
+                            title = "🔒 Écran : ${r.name}",
+                            delaySeconds = sec.toLong(),
+                            isGlobal = false,
+                            description = formatDuration(sec.toLong())
+                        )
+                    )
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error reading ScreenRuleManager delays: ${e.message}")
+        }
+
         return list.sortedByDescending { it.delaySeconds }
     }
 
     /**
      * Checks whether the user is eligible to request an uninstallation / settings unlock.
      * Rules:
-     * 1. No module must have a custom / dedicated delay (all modules aligned to global).
+     * 1. No module or rule must have a custom / dedicated delay (all rules aligned to global).
      * 2. No delay reduction or pending delay execution must be in flight.
      * 3. The general delay must be 0.
      */
@@ -337,14 +425,51 @@ object DelayManager {
             Log.e(TAG, "Error checking Whitelist eligibility: ${e.message}")
         }
 
-        // 2. Vérifier les modifications de délai général en attente
+        // 2. Vérifier les règles ConfigManager (Limites, Couvre-feux, Bloqueurs)
+        try {
+            val config = ConfigManager.loadConfig(context)
+            val customLimits = config.limits.filter { it.protectionDelaySec != null && it.protectionDelaySec > 0 }
+            if (customLimits.isNotEmpty()) {
+                val names = customLimits.joinToString(", ") { getAppLabel(context, it.packageName) }
+                return false to "Des limites d'applications ont un délai de protection dédié ($names). Remettez-les sur le délai général."
+            }
+
+            val customCurfews = config.periodBlocks.filter { it.protectionDelaySec != null && it.protectionDelaySec > 0 }
+            if (customCurfews.isNotEmpty()) {
+                return false to "Un ou plusieurs couvre-feux ont un délai de protection dédié. Remettez-les sur le délai général."
+            }
+
+            val customGroups = config.installBlocks.filter { it.protectionDelaySec != null && it.protectionDelaySec > 0 }
+            if (customGroups.isNotEmpty()) {
+                val names = customGroups.joinToString(", ") { it.name }
+                return false to "Des groupes de blocage ont un délai dédié ($names). Remettez-les sur le délai général."
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error checking ConfigManager eligibility: ${e.message}")
+        }
+
+        // 3. Vérifier ScreenRuleManager
+        try {
+            val customScreenRules = ScreenRuleManager.load(context).filter { (it.protectionDelaySec ?: 0) > 0 }
+            if (customScreenRules.isNotEmpty()) {
+                val names = customScreenRules.joinToString(", ") { it.name }
+                return false to "Des règles d'écran ont un délai dédié ($names). Remettez-les sur le délai général."
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error checking ScreenRuleManager eligibility: ${e.message}")
+        }
+
+        // 4. Vérifier les modifications de configuration ou de délai en attente
         val delayState = loadState(context)
+        if (delayState.requestedConfigUpdates.any { it.executeAt > now }) {
+            return false to "Des modifications de configuration sont encore en cours d'attente."
+        }
         if (delayState.pendingDelayExecuteAt > now) {
             val rem = ((delayState.pendingDelayExecuteAt - now) / 1000)
             return false to "Une modification du délai général est encore en attente (${formatDuration(rem)} restantes)."
         }
 
-        // 3. Vérifier que le délai général est à 0
+        // 5. Vérifier que le délai général est à 0
         val effectiveGlobalSec = getCurrentEffectiveDelaySeconds(context).toLong()
         if (effectiveGlobalSec > 0L) {
             return false to "Le délai général doit être réglé sur 0 minute (actuellement ${formatDuration(effectiveGlobalSec)})."
