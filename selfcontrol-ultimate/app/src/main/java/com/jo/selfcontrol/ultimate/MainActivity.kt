@@ -256,7 +256,11 @@ class MainActivity : Activity() {
             setSummaryText("Zero-Trust apps")
             onClickListener = {
                 zoomCanvas.zoomInto(this)
-                refreshInstallBlocksUI(force = true)
+                postDelayed({
+                    if (zoomCanvas.zoomedCircle == this) {
+                        refreshInstallBlocksUI(force = true)
+                    }
+                }, 350)
             }
         }
         val installHeader = LinearLayout(this).apply {
@@ -1496,7 +1500,16 @@ class MainActivity : Activity() {
 
     private fun refreshInstallBlocksUI(force: Boolean = false) {
         val state = WhitelistManager.loadState(this)
-        val allowedCount = state.allowedPackages.size
+        val installedSet = try {
+            packageManager.getInstalledPackages(0).map { it.packageName }.toSet()
+        } catch (e: Exception) {
+            emptySet()
+        }
+        val displayAllowed = state.allowedPackages
+            .filter { installedSet.isEmpty() || it in installedSet }
+            .filterNot { WhitelistManager.isGuarded(this, it) }
+            .toSet()
+        val allowedCount = displayAllowed.size
         val pendingCount = state.pendingRequests.size
 
         if (pendingCount > 0) {
@@ -1519,7 +1532,7 @@ class MainActivity : Activity() {
 
         val currentSecond = System.currentTimeMillis() / 1000
         val needTimeRefresh = pendingCount > 0 && (currentSecond - lastPendingUpdateSecond >= 30)
-        val stateChanged = state.allowedPackages != lastRenderedAllowed ||
+        val stateChanged = displayAllowed != lastRenderedAllowed ||
             state.pendingRequests != lastRenderedPending ||
             state.quarantineDelayHours != lastRenderedDelayHours ||
             state.useGlobalDelay != lastRenderedUseGlobal ||
@@ -1529,7 +1542,7 @@ class MainActivity : Activity() {
             return
         }
 
-        lastRenderedAllowed = state.allowedPackages
+        lastRenderedAllowed = displayAllowed
         lastRenderedPending = state.pendingRequests
         lastRenderedDelayHours = state.quarantineDelayHours
         lastRenderedUseGlobal = state.useGlobalDelay
@@ -1694,7 +1707,7 @@ class MainActivity : Activity() {
             setPadding(dp(8), dp(10), dp(8), dp(4))
         })
 
-        val sortedList = state.allowedPackages.sortedBy { pkg ->
+        val sortedList = displayAllowed.sortedBy { pkg ->
             getAppName(pkg).lowercase()
         }
 
@@ -1758,12 +1771,12 @@ class MainActivity : Activity() {
         val candidates = try {
             pm.getInstalledApplications(PackageManager.MATCH_UNINSTALLED_PACKAGES)
                 .filter { app ->
-                    val isSystem = (app.flags and ApplicationInfo.FLAG_SYSTEM) != 0
                     val isHiddenByUs = app.packageName in hiddenPackages
                     val isLaunchable = pm.getLaunchIntentForPackage(app.packageName) != null
-                    app.packageName != packageName &&
+                    !WhitelistManager.isGuarded(this, app.packageName) &&
+                        app.packageName != packageName &&
                         app.packageName !in state.allowedPackages &&
-                        (isHiddenByUs || !isSystem || isLaunchable)
+                        (isHiddenByUs || isLaunchable)
                 }
                 .sortedWith(
                     compareByDescending<ApplicationInfo> { it.packageName in hiddenPackages }
@@ -2682,7 +2695,8 @@ class MainActivity : Activity() {
                 val ai = packageManager.getApplicationInfo(pkg, 0)
                 packageManager.getApplicationLabel(ai).toString()
             } catch (e: PackageManager.NameNotFoundException) {
-                pkg.substringAfterLast('.')
+                val segments = pkg.split('.').filterNot { it in setOf("com", "fr", "ch", "org", "net", "io", "android", "app") }
+                segments.lastOrNull()?.replaceFirstChar { it.uppercase() } ?: pkg.substringAfterLast('.')
             }
         }
     }

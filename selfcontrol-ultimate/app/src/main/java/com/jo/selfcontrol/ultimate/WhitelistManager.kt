@@ -186,18 +186,19 @@ object WhitelistManager {
      * installation on a new phone does not lock out existing legitimate applications.
      */
     fun getInitialAllowedPackages(ctx: Context): Set<String> {
-        val result = INITIAL_ALLOWED_PACKAGES.toMutableSet()
+        val result = INITIAL_ALLOWED_PACKAGES.filterNot { isGuarded(ctx, it) }.toMutableSet()
         try {
             val pm = ctx.packageManager
             val installed = pm.getInstalledPackages(0)
             for (info in installed) {
                 if (info.packageName == ctx.packageName) continue
+                if (isGuarded(ctx, info)) continue
                 result.add(info.packageName)
             }
         } catch (e: Exception) {
             Log.e(TAG, "Error discovering initial installed packages: ${e.message}")
         }
-        return result
+        return result.filterNot { isGuarded(ctx, it) }.toSet()
     }
 
     data class PendingRequest(
@@ -235,7 +236,9 @@ object WhitelistManager {
             val json = JSONObject(file.readText())
             val enabled = json.optBoolean("enabled", true)
             val allowedArr = json.optJSONArray("allowed_packages") ?: JSONArray()
-            val allowed = (0 until allowedArr.length()).map { allowedArr.getString(it) }.toSet()
+            val rawAllowed = (0 until allowedArr.length()).map { allowedArr.getString(it) }.toSet()
+            // Clean up any guarded/system packages that were previously stored
+            val allowed = rawAllowed.filterNot { isGuarded(ctx, it) }.toSet()
 
             val pendingArr = json.optJSONArray("pending_requests") ?: JSONArray()
             val pending = (0 until pendingArr.length()).mapNotNull { i ->
@@ -252,7 +255,7 @@ object WhitelistManager {
             val pendingDelayUseGlobal = json.optBoolean("pending_delay_use_global", false)
             val pendingDelayExecuteAt = json.optLong("pending_delay_execute_at", 0L)
 
-            WhitelistState(
+            val state = WhitelistState(
                 enabled = enabled,
                 allowedPackages = allowed,
                 pendingRequests = pending,
@@ -262,6 +265,11 @@ object WhitelistManager {
                 pendingDelayUseGlobal = pendingDelayUseGlobal,
                 pendingDelayExecuteAt = pendingDelayExecuteAt
             )
+            if (rawAllowed.size != allowed.size) {
+                Log.i(TAG, "Pruned ${rawAllowed.size - allowed.size} system packages from whitelist state (remaining: ${allowed.size})")
+                saveState(ctx, state)
+            }
+            state
         } catch (e: Exception) {
             Log.e(TAG, "Error reading $STATE_FILE: ${e.message}", e)
             WhitelistState()
@@ -541,6 +549,7 @@ object WhitelistManager {
         val cleanPkg = sanitizePackageName(pkg)
         if (cleanPkg in HARD_GUARDS) return true
         if (cleanPkg == ctx.packageName) return true
+        if (isGuarded(ctx, cleanPkg)) return true
         val state = loadState(ctx)
         return cleanPkg in state.allowedPackages
     }
@@ -551,7 +560,11 @@ object WhitelistManager {
         if (pkg == ctx.packageName) return true
         if (pkg in launcherPackages(ctx)) return true
         if (pkg in inputMethodPackages(ctx)) return true
-        val appInfo = pkgInfo.applicationInfo ?: return false
+        val appInfo = pkgInfo.applicationInfo ?: try {
+            ctx.packageManager.getApplicationInfo(pkg, PackageManager.MATCH_UNINSTALLED_PACKAGES)
+        } catch (e: Exception) {
+            null
+        } ?: return false
         val isSystem = (appInfo.flags and ApplicationInfo.FLAG_SYSTEM) != 0
         val isUpdatedSystem = (appInfo.flags and ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) != 0
         if (isSystem || isUpdatedSystem) return true
@@ -562,6 +575,12 @@ object WhitelistManager {
         if (pkg in HARD_GUARDS) return true
         if (pkg == ctx.packageName) return true
         val pm = ctx.packageManager
+        try {
+            val appInfo = pm.getApplicationInfo(pkg, PackageManager.MATCH_UNINSTALLED_PACKAGES)
+            val isSystem = (appInfo.flags and ApplicationInfo.FLAG_SYSTEM) != 0
+            val isUpdatedSystem = (appInfo.flags and ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) != 0
+            if (isSystem || isUpdatedSystem) return true
+        } catch (e: Exception) {}
         val pkgInfo = try {
             pm.getPackageInfo(pkg, PackageManager.MATCH_UNINSTALLED_PACKAGES)
         } catch (e: Exception) {
