@@ -791,6 +791,129 @@ class MainActivity : Activity() {
             }
         }
 
+        // ── Visualiseur des Délais Configurés ──
+        val configuredDelays = DelayManager.getConfiguredDelays(this)
+        val maxDelaySec = configuredDelays.maxOfOrNull { it.delaySeconds }?.coerceAtLeast(1L) ?: 1L
+        val eligibility = DelayManager.checkUninstallEligibility(this)
+
+        val visualizerCard = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(14), dp(12), dp(14), dp(12))
+            background = roundedBackground(Color.parseColor("#1A202C"))
+            val lp = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = dp(16); bottomMargin = dp(8) }
+            layoutParams = lp
+
+            // Header row
+            addView(TextView(this@MainActivity).apply {
+                text = "📊 Vue d'ensemble des délais"
+                textSize = 14f
+                typeface = Typeface.DEFAULT_BOLD
+                setTextColor(Color.parseColor("#E0E6ED"))
+                setPadding(0, 0, 0, dp(10))
+            })
+
+            // Items in descending order
+            for (item in configuredDelays) {
+                val itemRow = LinearLayout(this@MainActivity).apply {
+                    orientation = LinearLayout.VERTICAL
+                    layoutParams = LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT
+                    ).apply { bottomMargin = dp(8) }
+
+                    // Title & duration text
+                    val infoRow = LinearLayout(this@MainActivity).apply {
+                        orientation = LinearLayout.HORIZONTAL
+                        gravity = Gravity.CENTER_VERTICAL
+                        layoutParams = LinearLayout.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            ViewGroup.LayoutParams.WRAP_CONTENT
+                        )
+
+                        addView(TextView(this@MainActivity).apply {
+                            text = item.title
+                            textSize = 13f
+                            setTextColor(Color.WHITE)
+                            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                        })
+
+                        val durationStr = if (item.delaySeconds <= 0L) {
+                            "0m (Aucun)"
+                        } else {
+                            val h = item.delaySeconds / 3600L
+                            val m = (item.delaySeconds % 3600L) / 60L
+                            if (h > 0L) "${h}h${if (m > 0L) " ${m}m" else ""}" else "${m}m"
+                        }
+                        addView(TextView(this@MainActivity).apply {
+                            text = durationStr
+                            textSize = 12f
+                            typeface = Typeface.DEFAULT_BOLD
+                            setTextColor(if (item.delaySeconds == 0L) Color.parseColor("#4CAF50") else Color.parseColor("#FFCA28"))
+                        })
+                    }
+                    addView(infoRow)
+
+                    // Minimalist horizontal bar
+                    val barContainer = LinearLayout(this@MainActivity).apply {
+                        orientation = LinearLayout.HORIZONTAL
+                        background = roundedBackground(Color.parseColor("#2D3748"))
+                        val bLp = LinearLayout.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            dp(6)
+                        ).apply { topMargin = dp(4) }
+                        layoutParams = bLp
+                    }
+
+                    val ratio = if (maxDelaySec > 0L && item.delaySeconds > 0L) {
+                        (item.delaySeconds.toFloat() / maxDelaySec.toFloat()).coerceIn(0.05f, 1f)
+                    } else 0f
+
+                    if (ratio > 0f) {
+                        val barFill = View(this@MainActivity).apply {
+                            background = roundedBackground(
+                                if (item.isGlobal) Color.parseColor("#00E5FF") else Color.parseColor("#FF9800")
+                            )
+                            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, ratio)
+                        }
+                        barContainer.addView(barFill)
+                        if (ratio < 1f) {
+                            val barEmpty = View(this@MainActivity).apply {
+                                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f - ratio)
+                            }
+                            barContainer.addView(barEmpty)
+                        }
+                    } else {
+                        // 0 seconds bar: slight green indicator
+                        val zeroFill = View(this@MainActivity).apply {
+                            background = roundedBackground(Color.parseColor("#4CAF50"))
+                            layoutParams = LinearLayout.LayoutParams(dp(16), ViewGroup.LayoutParams.MATCH_PARENT)
+                        }
+                        barContainer.addView(zeroFill)
+                    }
+                    addView(barContainer)
+                }
+                addView(itemRow)
+            }
+
+            // Status message at bottom of visualizer card
+            val statusText = TextView(this@MainActivity).apply {
+                textSize = 12f
+                setPadding(0, dp(6), 0, 0)
+                if (eligibility.first) {
+                    text = "🟢 Prêt : aucun délai personnalisé et délai général à 0."
+                    setTextColor(Color.parseColor("#4CAF50"))
+                } else {
+                    text = "🔒 Désinstallation verrouillée :\n${eligibility.second}"
+                    setTextColor(Color.parseColor("#FF9800"))
+                }
+            }
+            addView(statusText)
+        }
+        delayContainer.addView(visualizerCard)
+
         // Settings Unlock UI
         if (delayState.unlockSettingsUnlockTime > 0) {
             if (now >= delayState.unlockSettingsUnlockTime) {
@@ -825,12 +948,37 @@ class MainActivity : Activity() {
             // Locked
             delayContainer.addView(Button(this).apply {
                 val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-                lp.topMargin = dp(16)
+                lp.topMargin = dp(8)
                 layoutParams = lp
-                text = "Request Settings Unlock (to Uninstall)"
-                background = roundedBackground(Color.parseColor("#333333"))
-                setTextColor(Color.WHITE)
-                setOnClickListener { DelayManager.requestSettingsUnlock(this@MainActivity) }
+                if (eligibility.first) {
+                    text = "Request Settings Unlock (to Uninstall)"
+                    background = roundedBackground(Color.parseColor("#333333"))
+                    setTextColor(Color.WHITE)
+                    setOnClickListener {
+                        val res = DelayManager.requestSettingsUnlock(this@MainActivity)
+                        if (!res.first) {
+                            Toast.makeText(this@MainActivity, res.second ?: "Déverrouillage refusé", Toast.LENGTH_LONG).show()
+                        }
+                        refreshDelayUI()
+                    }
+                } else {
+                    text = "🔒 Request Settings Unlock (Verrouillé)"
+                    background = roundedBackground(Color.parseColor("#261B1B"))
+                    setTextColor(Color.parseColor("#9E7A7A"))
+                    setOnClickListener {
+                        AlertDialog.Builder(this@MainActivity, android.R.style.Theme_DeviceDefault_Dialog)
+                            .setTitle("Désinstallation verrouillée")
+                            .setMessage(
+                                "Pour demander le déverrouillage des paramètres et désinstaller l'application, les conditions suivantes doivent être respectées :\n\n" +
+                                "1. Tous les modules doivent être sur \"Aligné sur le délai général\".\n" +
+                                "2. Le délai général doit être réglé sur 0 minute.\n" +
+                                "3. Aucune modification de délai ne doit être en cours d'attente.\n\n" +
+                                "Détail actuel :\n${eligibility.second}"
+                            )
+                            .setPositiveButton("Compris", null)
+                            .show()
+                    }
+                }
             })
         }
     }

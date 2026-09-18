@@ -253,13 +253,120 @@ object DelayManager {
         Log.i(TAG, "Pending delay applied: ${target}s")
     }
 
+    data class ConfiguredDelayItem(
+        val title: String,
+        val delaySeconds: Long,
+        val isGlobal: Boolean = false,
+        val description: String = ""
+    )
+
+    fun formatDuration(seconds: Long): String {
+        if (seconds <= 0L) return "0s"
+        val h = seconds / 3600L
+        val m = (seconds % 3600L) / 60L
+        val s = seconds % 60L
+        return when {
+            h > 0L -> if (m > 0L) "${h}h ${m}m" else "${h}h"
+            m > 0L -> if (s > 0L) "${m}m ${s}s" else "${m}m"
+            else -> "${s}s"
+        }
+    }
+
+    /**
+     * Returns the list of all configured delays in the system:
+     * - The general delay (always included)
+     * - Any module with a dedicated delay (if NOT aligned on global delay)
+     * Sorted in descending order of duration.
+     */
+    fun getConfiguredDelays(context: Context): List<ConfiguredDelayItem> {
+        val list = mutableListOf<ConfiguredDelayItem>()
+
+        // 1. Délai général
+        val globalSec = getCurrentEffectiveDelaySeconds(context).toLong()
+        list.add(
+            ConfiguredDelayItem(
+                title = "🌐 Délai Général",
+                delaySeconds = globalSec,
+                isGlobal = true,
+                description = if (globalSec == 0L) "Aucun délai" else formatDuration(globalSec)
+            )
+        )
+
+        // 2. Quarantaine Whitelist (uniquement si non alignée sur le général)
+        try {
+            val wlState = WhitelistManager.loadState(context)
+            if (!wlState.useGlobalDelay) {
+                val wlSec = wlState.quarantineDelayHours * 3600L
+                list.add(
+                    ConfiguredDelayItem(
+                        title = "🛡️ Quarantaine Whitelist",
+                        delaySeconds = wlSec,
+                        isGlobal = false,
+                        description = "${wlState.quarantineDelayHours}h (Dédié)"
+                    )
+                )
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error reading Whitelist delay: ${e.message}")
+        }
+
+        return list.sortedByDescending { it.delaySeconds }
+    }
+
+    /**
+     * Checks whether the user is eligible to request an uninstallation / settings unlock.
+     * Rules:
+     * 1. No module must have a custom / dedicated delay (all modules aligned to global).
+     * 2. No delay reduction or pending delay execution must be in flight.
+     * 3. The general delay must be 0.
+     */
+    fun checkUninstallEligibility(context: Context): Pair<Boolean, String?> {
+        val now = System.currentTimeMillis()
+
+        // 1. Vérifier la Whitelist
+        try {
+            val wlState = WhitelistManager.loadState(context)
+            if (!wlState.useGlobalDelay) {
+                return false to "La Whitelist utilise un délai dédié (${wlState.quarantineDelayHours}h). Alignez-la sur le délai général."
+            }
+            if (wlState.pendingDelayExecuteAt > now) {
+                val rem = ((wlState.pendingDelayExecuteAt - now) / 1000)
+                return false to "Une modification du délai Whitelist est encore en attente (${formatDuration(rem)} restantes)."
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error checking Whitelist eligibility: ${e.message}")
+        }
+
+        // 2. Vérifier les modifications de délai général en attente
+        val delayState = loadState(context)
+        if (delayState.pendingDelayExecuteAt > now) {
+            val rem = ((delayState.pendingDelayExecuteAt - now) / 1000)
+            return false to "Une modification du délai général est encore en attente (${formatDuration(rem)} restantes)."
+        }
+
+        // 3. Vérifier que le délai général est à 0
+        val effectiveGlobalSec = getCurrentEffectiveDelaySeconds(context).toLong()
+        if (effectiveGlobalSec > 0L) {
+            return false to "Le délai général doit être réglé sur 0 minute (actuellement ${formatDuration(effectiveGlobalSec)})."
+        }
+
+        return true to null
+    }
+
     // Unlocks settings temporarily to allow device admin removal / uninstallation
-    fun requestSettingsUnlock(context: Context) {
+    fun requestSettingsUnlock(context: Context): Pair<Boolean, String?> {
+        val eligibility = checkUninstallEligibility(context)
+        if (!eligibility.first) {
+            Log.w(TAG, "Settings unlock rejected: ${eligibility.second}")
+            return eligibility
+        }
+
         val state = loadState(context)
         val effectiveDelaySeconds = getEffectiveDelaySeconds(state)
         val unlockTime = System.currentTimeMillis() + (effectiveDelaySeconds * 1000L)
         saveState(context, state.copy(unlockSettingsUnlockTime = unlockTime))
         Log.i(TAG, "Settings unlock requested. Will unlock at: $unlockTime")
+        return true to null
     }
 
     fun cancelSettingsUnlock(context: Context) {
