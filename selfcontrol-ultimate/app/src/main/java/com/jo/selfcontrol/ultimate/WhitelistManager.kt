@@ -218,6 +218,9 @@ object WhitelistManager {
         val pendingDelayExecuteAt: Long = 0L
     )
 
+    @Volatile private var cachedState: WhitelistState? = null
+    @Volatile private var lastStateModified: Long = 0L
+
     @Synchronized
     fun loadState(ctx: Context): WhitelistState {
         return checkAndPromotePendingRequests(ctx)
@@ -232,13 +235,19 @@ object WhitelistManager {
             saveState(ctx, defaultState)
             return defaultState
         }
+        val lastMod = file.lastModified()
+        val mem = cachedState
+        if (mem != null && lastMod == lastStateModified && lastMod > 0L) {
+            return mem
+        }
         return try {
             val json = JSONObject(file.readText())
             val enabled = json.optBoolean("enabled", true)
             val allowedArr = json.optJSONArray("allowed_packages") ?: JSONArray()
             val rawAllowed = (0 until allowedArr.length()).map { allowedArr.getString(it) }.toSet()
-            // Clean up any guarded/system packages that were previously stored
-            val allowed = rawAllowed.filterNot { isGuarded(ctx, it) }.toSet()
+            // Clean up any guarded/system packages if present
+            val hasGuarded = rawAllowed.any { isGuarded(ctx, it) }
+            val allowed = if (hasGuarded) rawAllowed.filterNot { isGuarded(ctx, it) }.toSet() else rawAllowed
 
             val pendingArr = json.optJSONArray("pending_requests") ?: JSONArray()
             val pending = (0 until pendingArr.length()).mapNotNull { i ->
@@ -265,7 +274,10 @@ object WhitelistManager {
                 pendingDelayUseGlobal = pendingDelayUseGlobal,
                 pendingDelayExecuteAt = pendingDelayExecuteAt
             )
-            if (rawAllowed.size != allowed.size) {
+            cachedState = state
+            lastStateModified = lastMod
+
+            if (hasGuarded) {
                 Log.i(TAG, "Pruned ${rawAllowed.size - allowed.size} system packages from whitelist state (remaining: ${allowed.size})")
                 saveState(ctx, state)
             }
@@ -431,6 +443,8 @@ object WhitelistManager {
                 put("pending_delay_execute_at", state.pendingDelayExecuteAt)
             }
             file.writeText(json.toString(2))
+            cachedState = state
+            lastStateModified = file.lastModified()
         } catch (e: Exception) {
             Log.e(TAG, "Error saving $STATE_FILE: ${e.message}", e)
         }
@@ -554,57 +568,92 @@ object WhitelistManager {
         return cleanPkg in state.allowedPackages
     }
 
+    private val guardedCache = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
+    @Volatile private var cachedLauncherPackages: Set<String> = emptySet()
+    @Volatile private var lastLauncherCheck: Long = 0L
+    @Volatile private var cachedImePackages: Set<String> = emptySet()
+    @Volatile private var lastImeCheck: Long = 0L
+
     fun isGuarded(ctx: Context, pkgInfo: PackageInfo): Boolean {
         val pkg = pkgInfo.packageName
-        if (pkg in HARD_GUARDS) return true
-        if (pkg == ctx.packageName) return true
-        if (pkg in launcherPackages(ctx)) return true
-        if (pkg in inputMethodPackages(ctx)) return true
-        val appInfo = pkgInfo.applicationInfo ?: try {
-            ctx.packageManager.getApplicationInfo(pkg, PackageManager.MATCH_UNINSTALLED_PACKAGES)
-        } catch (e: Exception) {
-            null
-        } ?: return false
-        val isSystem = (appInfo.flags and ApplicationInfo.FLAG_SYSTEM) != 0
-        val isUpdatedSystem = (appInfo.flags and ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) != 0
-        if (isSystem || isUpdatedSystem) return true
+        guardedCache[pkg]?.let { return it }
+        if (pkg in HARD_GUARDS || pkg == ctx.packageName) {
+            guardedCache[pkg] = true
+            return true
+        }
+        val appInfo = pkgInfo.applicationInfo
+        val isSys = if (appInfo != null) {
+            ((appInfo.flags and ApplicationInfo.FLAG_SYSTEM) != 0) || ((appInfo.flags and ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) != 0)
+        } else false
+        if (isSys) {
+            guardedCache[pkg] = true
+            return true
+        }
+        if (pkg in launcherPackages(ctx) || pkg in inputMethodPackages(ctx)) {
+            guardedCache[pkg] = true
+            return true
+        }
+        guardedCache[pkg] = false
         return false
     }
 
     fun isGuarded(ctx: Context, pkg: String): Boolean {
-        if (pkg in HARD_GUARDS) return true
-        if (pkg == ctx.packageName) return true
-        val pm = ctx.packageManager
-        try {
-            val appInfo = pm.getApplicationInfo(pkg, PackageManager.MATCH_UNINSTALLED_PACKAGES)
-            val isSystem = (appInfo.flags and ApplicationInfo.FLAG_SYSTEM) != 0
-            val isUpdatedSystem = (appInfo.flags and ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) != 0
-            if (isSystem || isUpdatedSystem) return true
-        } catch (e: Exception) {}
-        val pkgInfo = try {
-            pm.getPackageInfo(pkg, PackageManager.MATCH_UNINSTALLED_PACKAGES)
-        } catch (e: Exception) {
-            null
+        guardedCache[pkg]?.let { return it }
+        if (pkg in HARD_GUARDS || pkg == ctx.packageName) {
+            guardedCache[pkg] = true
+            return true
         }
-        return if (pkgInfo != null) isGuarded(ctx, pkgInfo) else false
+        val pm = ctx.packageManager
+        val isSys = try {
+            val appInfo = pm.getApplicationInfo(pkg, PackageManager.MATCH_UNINSTALLED_PACKAGES)
+            ((appInfo.flags and ApplicationInfo.FLAG_SYSTEM) != 0) || ((appInfo.flags and ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) != 0)
+        } catch (e: Exception) {
+            false
+        }
+        if (isSys) {
+            guardedCache[pkg] = true
+            return true
+        }
+        if (pkg in launcherPackages(ctx) || pkg in inputMethodPackages(ctx)) {
+            guardedCache[pkg] = true
+            return true
+        }
+        guardedCache[pkg] = false
+        return false
     }
 
-    private fun launcherPackages(ctx: Context): Set<String> = try {
-        val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
-        ctx.packageManager.queryIntentActivities(intent, 0)
-            .map { it.activityInfo.packageName }
-            .toSet()
-    } catch (e: Exception) {
-        Log.w(TAG, "Launcher resolve failed: ${e.message}")
-        emptySet()
+    private fun launcherPackages(ctx: Context): Set<String> {
+        val now = System.currentTimeMillis()
+        if (cachedLauncherPackages.isNotEmpty() && (now - lastLauncherCheck < 60_000L)) {
+            return cachedLauncherPackages
+        }
+        return try {
+            val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
+            val set = ctx.packageManager.queryIntentActivities(intent, 0)
+                .map { it.activityInfo.packageName }
+                .toSet()
+            cachedLauncherPackages = set
+            lastLauncherCheck = now
+            set
+        } catch (e: Exception) {
+            cachedLauncherPackages
+        }
     }
 
-    private fun inputMethodPackages(ctx: Context): Set<String> = try {
-        val imm = ctx.getSystemService(Context.INPUT_METHOD_SERVICE) as? android.view.inputmethod.InputMethodManager
-        imm?.enabledInputMethodList?.map { it.packageName }?.toSet() ?: emptySet()
-    } catch (e: Exception) {
-        Log.w(TAG, "Input methods resolve failed: ${e.message}")
-        emptySet()
+    private fun inputMethodPackages(ctx: Context): Set<String> {
+        val now = System.currentTimeMillis()
+        if (cachedImePackages.isNotEmpty() && (now - lastImeCheck < 60_000L)) {
+            return cachedImePackages
+        }
+        return try {
+            val imm = ctx.getSystemService(Context.INPUT_METHOD_SERVICE) as? android.view.inputmethod.InputMethodManager
+            val set = imm?.enabledInputMethodList?.map { it.packageName }?.toSet() ?: emptySet()
+            cachedImePackages = set
+            lastImeCheck = now
+            set
+        } catch (e: Exception) {
+            cachedImePackages
+        }
     }
 
     /**

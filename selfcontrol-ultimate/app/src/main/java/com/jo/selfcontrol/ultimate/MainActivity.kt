@@ -74,6 +74,24 @@ class MainActivity : Activity() {
     private val appNameCache = java.util.concurrent.ConcurrentHashMap<String, String>()
     private val appIconCache = java.util.concurrent.ConcurrentHashMap<String, Drawable>()
 
+    @Volatile private var cachedInstalledPackages: Set<String> = emptySet()
+    @Volatile private var lastInstalledPackagesCheck: Long = 0L
+
+    private fun getCachedInstalledPackages(): Set<String> {
+        val now = System.currentTimeMillis()
+        if (cachedInstalledPackages.isNotEmpty() && (now - lastInstalledPackagesCheck < 15_000L)) {
+            return cachedInstalledPackages
+        }
+        val set = try {
+            packageManager.getInstalledPackages(0).map { it.packageName }.toSet()
+        } catch (e: Exception) {
+            emptySet()
+        }
+        cachedInstalledPackages = set
+        lastInstalledPackagesCheck = now
+        return set
+    }
+
     private val refreshRunnable = object : Runnable {
         override fun run() {
             refreshPermissions()
@@ -1648,16 +1666,7 @@ class MainActivity : Activity() {
 
     private fun refreshInstallBlocksUI(force: Boolean = false) {
         val state = WhitelistManager.loadState(this)
-        val installedSet = try {
-            packageManager.getInstalledPackages(0).map { it.packageName }.toSet()
-        } catch (e: Exception) {
-            emptySet()
-        }
-        val displayAllowed = state.allowedPackages
-            .filter { installedSet.isEmpty() || it in installedSet }
-            .filterNot { WhitelistManager.isGuarded(this, it) }
-            .toSet()
-        val allowedCount = displayAllowed.size
+        val allowedCount = state.allowedPackages.size
         val pendingCount = state.pendingRequests.size
 
         if (pendingCount > 0) {
@@ -1677,6 +1686,12 @@ class MainActivity : Activity() {
         if (::zoomCanvas.isInitialized && zoomCanvas.zoomedCircle != installBlocklistCircle) {
             return
         }
+
+        val installedSet = getCachedInstalledPackages()
+        val displayAllowed = state.allowedPackages
+            .filter { installedSet.isEmpty() || it in installedSet }
+            .filterNot { WhitelistManager.isGuarded(this, it) }
+            .toSet()
 
         val currentSecond = System.currentTimeMillis() / 1000
         val needTimeRefresh = pendingCount > 0 && (currentSecond - lastPendingUpdateSecond >= 30)
