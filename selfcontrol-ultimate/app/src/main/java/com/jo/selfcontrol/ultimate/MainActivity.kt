@@ -26,6 +26,7 @@ import android.text.style.ForegroundColorSpan
 import android.text.style.RelativeSizeSpan
 import android.text.style.StyleSpan
 import android.widget.*
+import org.json.JSONObject
 import java.util.Calendar
 class MainActivity : Activity() {
 
@@ -634,25 +635,42 @@ class MainActivity : Activity() {
                             ViewGroup.LayoutParams.WRAP_CONTENT
                         ).apply { bottomMargin = dp(8) }
 
-                        // Show detailed diff and descriptive title
-                        val pendingConfig = ConfigManager.fromJsonString(update.newLimitsJson)
                         val currentConfig = ConfigManager.loadConfig(this@MainActivity)
-                        val diffLines = if (pendingConfig != null) describeConfigDiff(currentConfig, pendingConfig) else emptyList()
+                        val cardTitle: String
+                        val diffLines: List<String>
 
-                        val cardTitle = when {
-                            update.description.isNotBlank() && update.description != "Update config" && update.description != "Mise à jour configuration" -> update.description
-                            diffLines.isNotEmpty() -> {
-                                val firstItem = diffLines.firstOrNull { it.trim().startsWith("•") || it.trim().startsWith("[") }
-                                    ?: diffLines.first()
-                                firstItem.trim().removePrefix("•").removePrefix("  •").trim()
+                        if (update.targetType == "APP_LIMIT") {
+                            val pkg = update.targetKey
+                            val appName = getAppName(pkg)
+                            if (update.isDelete) {
+                                cardTitle = "Suppr. limite : $appName"
+                                diffLines = listOf("  • [SUPPRIMÉ] $appName")
+                            } else {
+                                cardTitle = update.description.ifBlank { "Modifier limite : $appName" }
+                                val activeLimit = currentConfig.limits.find { it.packageName == pkg }
+                                val pendingLimit = runCatching { ConfigManager.parseAppLimit(JSONObject(update.payloadJson)) }.getOrNull()
+                                diffLines = if (pendingLimit != null) describeSingleAppDiff(activeLimit, pendingLimit) else listOf("  • $appName modifié")
                             }
-                            pendingConfig?.limits?.isNotEmpty() == true -> {
-                                val appNames = pendingConfig.limits.joinToString(", ") { getAppName(it.packageName) }
-                                "Limite : $appNames"
+                        } else {
+                            // Show detailed diff and descriptive title for legacy or full config updates
+                            val pendingConfig = ConfigManager.fromJsonString(update.newLimitsJson)
+                            diffLines = if (pendingConfig != null) describeConfigDiff(currentConfig, pendingConfig) else emptyList()
+
+                            cardTitle = when {
+                                update.description.isNotBlank() && update.description != "Update config" && update.description != "Mise à jour configuration" -> update.description
+                                diffLines.isNotEmpty() -> {
+                                    val firstItem = diffLines.firstOrNull { it.trim().startsWith("•") || it.trim().startsWith("[") }
+                                        ?: diffLines.first()
+                                    firstItem.trim().removePrefix("•").removePrefix("  •").trim()
+                                }
+                                pendingConfig?.limits?.isNotEmpty() == true -> {
+                                    val appNames = pendingConfig.limits.joinToString(", ") { getAppName(it.packageName) }
+                                    "Limite : $appNames"
+                                }
+                                pendingConfig?.periodBlocks?.isNotEmpty() == true -> "Couvre-feu"
+                                pendingConfig?.installBlocks?.isNotEmpty() == true -> "Bloqueur d'installation"
+                                else -> "Modification en attente"
                             }
-                            pendingConfig?.periodBlocks?.isNotEmpty() == true -> "Couvre-feu"
-                            pendingConfig?.installBlocks?.isNotEmpty() == true -> "Bloqueur d'installation"
-                            else -> "Modification en attente"
                         }
 
                         addView(TextView(this@MainActivity).apply {
@@ -963,7 +981,9 @@ class MainActivity : Activity() {
                 })
 
                 addView(TextView(this@MainActivity).apply {
-                    val durationStr = if (item.delaySeconds <= 0L) {
+                    val durationStr = if (item.description.isNotBlank()) {
+                        item.description
+                    } else if (item.delaySeconds <= 0L) {
                         "0m (Aucun)"
                     } else {
                         DelayManager.formatDuration(item.delaySeconds)
@@ -1232,8 +1252,12 @@ class MainActivity : Activity() {
     }
 
     private fun showEditAppDialog(pkg: String) {
-        val config = loadEditableConfig()
-        val existingLimit = config.limits.find { it.packageName == pkg }
+        val activeConfig = ConfigManager.loadConfig(this)
+        val activeLimit = activeConfig.limits.find { it.packageName == pkg }
+
+        // If there is a pending edit for this app, pre-fill with the pending values so user sees their pending change
+        val pendingInfo = DelayManager.getPendingAppLimit(this, pkg)
+        val existingLimit = if (pendingInfo != null && !pendingInfo.second) pendingInfo.first else activeLimit
 
         val mins = existingLimit?.maxMinutesPerDay ?: 30
         val existingSession = existingLimit?.session
@@ -1305,7 +1329,7 @@ class MainActivity : Activity() {
 
         // ── Per-rule protection timer ────────────────
         var protectionDelaySec = existingLimit?.protectionDelaySec
-        root.addView(buildProtectionTimerRow(protectionDelaySec) { protectionDelaySec = it })
+        root.addView(buildProtectionTimerRow(protectionDelaySec, activeLimit?.protectionDelaySec) { protectionDelaySec = it })
         root.addView(TextView(this).apply {
             text = "Overrides the global delay for this app only. A huge value makes this limit " +
                 "practically impossible to loosen on impulse."
@@ -1328,8 +1352,7 @@ class MainActivity : Activity() {
                         maxSessionsPerDay = maxSessionsPicker.value
                     )
                 } else null
-                val newLimits = config.limits.filter { it.packageName != pkg }.toMutableList()
-                newLimits.add(ConfigManager.AppLimit(
+                val newLimit = ConfigManager.AppLimit(
                     packageName = pkg,
                     maxMinutesPerDay = newMins,
                     maxSecondsPerDay = newMins * 60,
@@ -1341,17 +1364,65 @@ class MainActivity : Activity() {
                     session = session,
                     protectionDelaySec = protectionDelaySec,
                     channelBlocks = existingLimit?.channelBlocks ?: emptyList()
-                ))
-                val newConfig = ConfigManager.Config(newLimits, config.periodBlocks, config.installBlocks)
-                saveConfigWithDelay(newConfig)
+                )
+
+                val globalDelay = DelayManager.getCurrentEffectiveDelaySeconds(this)
+                val requirement = ConfigManager.requiredDeferForAppLimit(activeLimit, newLimit, globalDelay)
+                val unlockApplies = !requirement.fromExplicitTimer && DelayManager.isSettingsUnlocked(this)
+                val mustDefer = requirement.mustDefer && !unlockApplies
+
+                if (!mustDefer) {
+                    val cur = ConfigManager.loadConfig(this)
+                    val updatedLimits = cur.limits.filter { it.packageName != pkg }.toMutableList()
+                    updatedLimits.add(newLimit)
+                    ConfigManager.saveConfig(this, cur.copy(limits = updatedLimits))
+                    DelayManager.cancelAppLimitUpdate(this, pkg)
+                    Toast.makeText(this, "Limit updated for ${getAppName(pkg)}.", Toast.LENGTH_SHORT).show()
+                } else {
+                    DelayManager.requestAppLimitUpdate(
+                        this,
+                        pkg,
+                        newLimit,
+                        describeSingleAppChange(activeLimit, newLimit),
+                        overrideDelaySeconds = requirement.seconds
+                    )
+                    val scope = if (requirement.fromExplicitTimer) "rule timer" else "global delay"
+                    Toast.makeText(
+                        this,
+                        "Change queued for ${formatLongDuration(requirement.seconds)} ($scope — ${requirement.reason}).",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
             }
             .setNegativeButton("Cancel", null)
 
-        if (existingLimit != null) {
+        if (existingLimit != null || activeLimit != null) {
             builder.setNeutralButton("Delete timer") { _, _ ->
-                val newLimits = config.limits.filter { it.packageName != pkg }
-                val newConfig = ConfigManager.Config(newLimits, config.periodBlocks, config.installBlocks)
-                saveConfigWithDelay(newConfig)
+                val globalDelay = DelayManager.getCurrentEffectiveDelaySeconds(this)
+                val requirement = ConfigManager.requiredDeferForAppLimit(activeLimit, null, globalDelay)
+                val unlockApplies = !requirement.fromExplicitTimer && DelayManager.isSettingsUnlocked(this)
+                val mustDefer = requirement.mustDefer && !unlockApplies
+
+                if (!mustDefer) {
+                    val cur = ConfigManager.loadConfig(this)
+                    val updatedLimits = cur.limits.filter { it.packageName != pkg }
+                    ConfigManager.saveConfig(this, cur.copy(limits = updatedLimits))
+                    DelayManager.cancelAppLimitUpdate(this, pkg)
+                    Toast.makeText(this, "Limit deleted for ${getAppName(pkg)}.", Toast.LENGTH_SHORT).show()
+                } else {
+                    DelayManager.requestAppLimitDelete(
+                        this,
+                        pkg,
+                        "Suppr. limite : ${getAppName(pkg)}",
+                        overrideDelaySeconds = requirement.seconds
+                    )
+                    val scope = if (requirement.fromExplicitTimer) "rule timer" else "global delay"
+                    Toast.makeText(
+                        this,
+                        "Deletion queued for ${formatLongDuration(requirement.seconds)} ($scope — ${requirement.reason}).",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
             }
         }
 
@@ -1491,6 +1562,47 @@ class MainActivity : Activity() {
                     textSize = 12f
                     setTextColor(Color.BLACK)
                 })
+            }
+
+            val pendingUpdates = DelayManager.loadState(this@MainActivity).requestedConfigUpdates
+            val pendingCurfewUpdate = pendingUpdates.find {
+                it.targetType == "CURFEW" && it.targetKey == rule.scheduleSignature()
+            }
+            if (pendingCurfewUpdate != null) {
+                if (pendingCurfewUpdate.isDelete) {
+                    val rem = ((pendingCurfewUpdate.executeAt - System.currentTimeMillis()) / 1000).toInt().coerceAtLeast(0)
+                    addView(TextView(this@MainActivity).apply {
+                        text = "⏳ Suppression du couvre-feu en attente (${formatTime(rem)})"
+                        setTextColor(Color.parseColor("#D32F2F"))
+                        textSize = 12f
+                        typeface = Typeface.DEFAULT_BOLD
+                        setPadding(0, dp(4), 0, 0)
+                    })
+                } else {
+                    val pendingRule = runCatching { ConfigManager.parsePeriodBlockRule(JSONObject(pendingCurfewUpdate.payloadJson)) }.getOrNull()
+                    if (pendingRule != null) {
+                        val pStart = "%02d:%02d".format(pendingRule.blockedStartMinutes / 60, pendingRule.blockedStartMinutes % 60)
+                        val pEnd = "%02d:%02d".format(pendingRule.blockedEndMinutes / 60, pendingRule.blockedEndMinutes % 60)
+                        val pDays = formatDays(pendingRule.allowedDays)
+                        val rem = ((pendingCurfewUpdate.executeAt - System.currentTimeMillis()) / 1000).toInt().coerceAtLeast(0)
+                        val changes = mutableListOf<String>()
+                        if (pStart != start || pEnd != end) changes.add("$pStart -> $pEnd")
+                        if (pDays != days) changes.add(pDays)
+                        if (pendingRule.protectionDelaySec != rule.protectionDelaySec) {
+                            val pSec = pendingRule.protectionDelaySec?.let { formatLongDuration(it) } ?: "Global"
+                            changes.add("délai: $pSec")
+                        }
+                        if (changes.isNotEmpty()) {
+                            addView(TextView(this@MainActivity).apply {
+                                text = "⏳ En attente : ${changes.joinToString(" · ")} (${formatTime(rem)})"
+                                setTextColor(Color.parseColor("#E65100"))
+                                textSize = 12f
+                                typeface = Typeface.DEFAULT_BOLD
+                                setPadding(0, dp(4), 0, 0)
+                            })
+                        }
+                    }
+                }
             }
             val buttonRow = LinearLayout(this@MainActivity).apply {
                 orientation = LinearLayout.HORIZONTAL
@@ -2477,6 +2589,44 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun describeSingleAppDiff(old: ConfigManager.AppLimit?, new: ConfigManager.AppLimit): List<String> {
+        val lines = mutableListOf<String>()
+        val name = getAppName(new.packageName)
+        if (old == null) {
+            lines.add("  • [NOUVEAU] $name: ${new.maxMinutesPerDay}m/jour")
+            new.session?.let { lines.add("    ↳ session: ${it.sessionDurationSec/60}m, cooldown ${it.cooldownSec/60}m, max ${it.maxSessionsPerDay}/j") }
+            new.protectionDelaySec?.let { lines.add("    ↳ délai protection: ${DelayManager.formatDuration(it.toLong())}") }
+        } else {
+            if (old.maxMinutesPerDay != new.maxMinutesPerDay) {
+                lines.add("  • $name: ${old.maxMinutesPerDay}m/jour → ${new.maxMinutesPerDay}m/jour")
+            }
+            val sessionDesc = describeSessionDiff(name, old.session, new.session)
+            if (sessionDesc != null) lines.add(sessionDesc)
+            if (old.protectionDelaySec != new.protectionDelaySec) {
+                val oldProt = old.protectionDelaySec?.let { DelayManager.formatDuration(it.toLong()) } ?: "Global"
+                val newProt = new.protectionDelaySec?.let { DelayManager.formatDuration(it.toLong()) } ?: "Global"
+                lines.add("  • $name délai protection: $oldProt → $newProt")
+            }
+        }
+        if (lines.isEmpty()) {
+            lines.add("  • $name: aucune modification majeure")
+        }
+        return lines
+    }
+
+    private fun describeSingleAppChange(old: ConfigManager.AppLimit?, new: ConfigManager.AppLimit): String {
+        val name = getAppName(new.packageName)
+        if (old == null) return "Ajout limite : $name"
+        if (old.protectionDelaySec != new.protectionDelaySec) {
+            val target = new.protectionDelaySec?.let { DelayManager.formatDuration(it.toLong()) } ?: "Global"
+            return "Délai protection: $name (→ $target)"
+        }
+        if (old.maxMinutesPerDay != new.maxMinutesPerDay) {
+            return "Limite $name: ${old.maxMinutesPerDay}m → ${new.maxMinutesPerDay}m"
+        }
+        return "Modifier limite : $name"
+    }
+
     private fun formatDays(days: List<Int>): String {
         val sorted = days.distinct().sorted()
         if (sorted.size == 7) return "Every day"
@@ -2550,9 +2700,22 @@ class MainActivity : Activity() {
             val usageText = row.findViewWithTag<TextView>("usage_$pkg")
             val statusText = row.findViewWithTag<TextView>("status_$pkg")
             val sessionText = row.findViewWithTag<TextView>("session_$pkg")
+            val delayBadge = row.findViewWithTag<TextView>("delay_$pkg")
+
+            val pendingInfo = DelayManager.getPendingAppLimit(this, pkg)
+            val pendingLimit = if (pendingInfo != null && !pendingInfo.second) pendingInfo.first else null
+            val isDeletePending = pendingInfo?.second == true
 
             progressBar?.progress = if (maxSeconds > 0) ((usedSeconds * 100) / maxSeconds).coerceAtMost(100) else 0
-            usageText?.text = "${formatTime(usedSeconds)} / ${formatTime(maxSeconds)}"
+            
+            // Usage text with pending quota transition
+            val baseUsage = "${formatTime(usedSeconds)} / ${formatTime(maxSeconds)}"
+            if (pendingLimit != null && pendingLimit.maxSecondsPerDay != maxSeconds) {
+                val pMins = pendingLimit.maxMinutesPerDay
+                usageText?.text = "$baseUsage (⏳ → ${pMins}m)"
+            } else {
+                usageText?.text = baseUsage
+            }
 
             if (isBlocked) {
                 statusText?.text = "BLOCKED"
@@ -2562,13 +2725,62 @@ class MainActivity : Activity() {
                 statusText?.visibility = View.GONE
             }
 
+            // Session text with pending session transition
             val sessionCfg = limit.session
-            if (sessionCfg != null && sessionText != null) {
-                val st = SessionManager.statusOf(this, pkg, sessionCfg, System.currentTimeMillis())
-                sessionText.text = formatSessionStatus(st)
-                sessionText.visibility = View.VISIBLE
-            } else {
-                sessionText?.visibility = View.GONE
+            val pendingSession = pendingLimit?.session
+            if (sessionText != null) {
+                if (sessionCfg != null) {
+                    val st = SessionManager.statusOf(this, pkg, sessionCfg, System.currentTimeMillis())
+                    val baseSession = formatSessionStatus(st)
+                    if (pendingLimit != null && pendingSession == null) {
+                        sessionText.text = "$baseSession (⏳ → désactivée)"
+                        sessionText.visibility = View.VISIBLE
+                    } else if (pendingSession != null && (pendingSession.sessionDurationSec != sessionCfg.sessionDurationSec || pendingSession.cooldownSec != sessionCfg.cooldownSec || pendingSession.maxSessionsPerDay != sessionCfg.maxSessionsPerDay)) {
+                        sessionText.text = "$baseSession (⏳ → cooldown ${pendingSession.cooldownSec / 60}m)"
+                        sessionText.visibility = View.VISIBLE
+                    } else {
+                        sessionText.text = baseSession
+                        sessionText.visibility = View.VISIBLE
+                    }
+                } else if (pendingSession != null) {
+                    sessionText.text = "⏳ Session en attente : ${pendingSession.sessionDurationSec / 60}m/cooldown ${pendingSession.cooldownSec / 60}m"
+                    sessionText.visibility = View.VISIBLE
+                } else {
+                    sessionText.visibility = View.GONE
+                }
+            }
+
+            // Delay badge with transition
+            if (delayBadge != null) {
+                if (isDeletePending) {
+                    delayBadge.text = "⏳ Suppression en attente"
+                    delayBadge.setTextColor(Color.parseColor("#D32F2F"))
+                } else {
+                    val activeDelaySec = limit.protectionDelaySec
+                    val pendingDelaySec = pendingLimit?.protectionDelaySec
+                    if (activeDelaySec != null && activeDelaySec > 0) {
+                        val activeStr = formatShortDuration(activeDelaySec)
+                        if (pendingDelaySec != null && pendingDelaySec != activeDelaySec) {
+                            val pendingStr = formatShortDuration(pendingDelaySec)
+                            delayBadge.text = "🛡️ $activeStr (⏳ → $pendingStr)"
+                            delayBadge.setTextColor(Color.parseColor("#E65100"))
+                        } else {
+                            delayBadge.text = "🛡️ $activeStr"
+                            delayBadge.setTextColor(Color.parseColor("#2E7D32"))
+                        }
+                    } else {
+                        val globalDelay = DelayManager.getCurrentEffectiveDelaySeconds(this)
+                        val globalStr = if (globalDelay > 0) formatShortDuration(globalDelay) else "0s"
+                        if (pendingDelaySec != null && pendingDelaySec > 0) {
+                            val pendingStr = formatShortDuration(pendingDelaySec)
+                            delayBadge.text = "🛡️ Global (⏳ → $pendingStr)"
+                            delayBadge.setTextColor(Color.parseColor("#E65100"))
+                        } else {
+                            delayBadge.text = "🛡️ Global ($globalStr)"
+                            delayBadge.setTextColor(Color.parseColor("#757575"))
+                        }
+                    }
+                }
             }
         }
     }
@@ -2667,12 +2879,31 @@ class MainActivity : Activity() {
             setTextColor(Color.BLACK)
         })
 
-        infoCol.addView(TextView(this).apply {
+        val bottomRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                topMargin = dp(2)
+            }
+        }
+
+        bottomRow.addView(TextView(this).apply {
             tag = "session_$pkg"
             textSize = 11f
             setTextColor(Color.BLACK)
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
             visibility = View.GONE
         })
+
+        bottomRow.addView(TextView(this).apply {
+            tag = "delay_$pkg"
+            textSize = 11f
+            setTextColor(Color.parseColor("#555555"))
+            typeface = Typeface.DEFAULT_BOLD
+            gravity = Gravity.END
+        })
+
+        infoCol.addView(bottomRow)
 
         row.addView(infoCol)
         return row
@@ -3187,6 +3418,7 @@ class MainActivity : Activity() {
      */
     private fun buildProtectionTimerRow(
         initial: Int?,
+        activeSeconds: Int? = null,
         onChanged: (Int?) -> Unit
     ): LinearLayout {
         var current = initial
@@ -3195,8 +3427,13 @@ class MainActivity : Activity() {
             gravity = Gravity.CENTER_VERTICAL
             setPadding(0, dp(16), 0, dp(4))
         }
+        val labelText = if (activeSeconds != null && activeSeconds != current) {
+            "Protection timer: ${protectionTimerLabel(current)} (Actuel : ${protectionTimerLabel(activeSeconds)})"
+        } else {
+            "Protection timer: ${protectionTimerLabel(current)}"
+        }
         val label = TextView(this).apply {
-            text = "Protection timer: ${protectionTimerLabel(current)}"
+            text = labelText
             textSize = 14f
             setTextColor(Color.WHITE)
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
@@ -3210,7 +3447,12 @@ class MainActivity : Activity() {
             setOnClickListener {
                 showProtectionTimerDialog(current) { picked ->
                     current = picked
-                    label.text = "Protection timer: ${protectionTimerLabel(picked)}"
+                    val newText = if (activeSeconds != null && activeSeconds != picked) {
+                        "Protection timer: ${protectionTimerLabel(picked)} (Actuel : ${protectionTimerLabel(activeSeconds)})"
+                    } else {
+                        "Protection timer: ${protectionTimerLabel(picked)}"
+                    }
+                    label.text = newText
                     onChanged(picked)
                 }
             }

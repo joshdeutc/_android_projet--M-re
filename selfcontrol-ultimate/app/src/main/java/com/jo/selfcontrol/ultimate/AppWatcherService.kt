@@ -862,15 +862,30 @@ class AppWatcherService : AccessibilityService() {
         Log.i(TAG, "Screen rules reloaded: ${screenRules.size}")
     }
 
-    /** Whether [viewId] is on screen right now, in one of [pkg]'s windows. */
+    /** Whether [viewId] (or text marker `text:...`, or desc marker `desc:...`) is on screen right now, in one of [pkg]'s windows. */
     private fun visibleIdPresent(pkg: String, viewId: String): Boolean {
         try {
             for (window in windows) {
                 val root = window.root ?: continue
                 if (root.packageName != pkg) continue
-                if (root.findAccessibilityNodeInfosByViewId(viewId).any { it.isVisibleToUser }) {
-                    return true
+                val match = when {
+                    viewId.startsWith("text:") -> {
+                        val txt = viewId.removePrefix("text:")
+                        root.findAccessibilityNodeInfosByText(txt).any {
+                            it.isVisibleToUser && it.text?.toString().equals(txt, ignoreCase = true)
+                        }
+                    }
+                    viewId.startsWith("desc:") -> {
+                        val desc = viewId.removePrefix("desc:")
+                        root.findAccessibilityNodeInfosByText(desc).any {
+                            it.isVisibleToUser && it.contentDescription?.toString().equals(desc, ignoreCase = true)
+                        }
+                    }
+                    else -> {
+                        root.findAccessibilityNodeInfosByViewId(viewId).any { it.isVisibleToUser }
+                    }
                 }
+                if (match) return true
             }
         } catch (e: Exception) {
             Log.w(TAG, "visibleIdPresent($viewId) failed: ${e.message}")
@@ -889,10 +904,15 @@ class AppWatcherService : AccessibilityService() {
      */
     private fun performScreenEscape(rule: ScreenRuleManager.ScreenRule, hit: String) {
         val pkg = rule.packageName
+        val escapeTapId = rule.escapeTapId ?: if (pkg == "com.snapchat.android") {
+            "com.snapchat.android:id/ngs_chat_icon_container"
+        } else null
+
         val how = when {
-            rule.escapeTapId != null &&
-                tapNavItem(pkg, rule.escapeTapId, rule.escapeTapIndex) -> "tap"
+            escapeTapId != null &&
+                tapNavItem(pkg, escapeTapId, rule.escapeTapIndex) -> "tap"
             rule.escapeDeeplink != null && openDeeplink(pkg, rule.escapeDeeplink) -> "deeplink"
+            pkg == "com.snapchat.android" && tapSnapchatChat() -> "snapchat_chat_coords"
             performGlobalAction(GLOBAL_ACTION_BACK) -> "back"
             else -> "failed"
         }
@@ -908,6 +928,23 @@ class AppWatcherService : AccessibilityService() {
                 "${rule.name} $shortHit → $how, reached=$reached"
             )
         }, 900L)
+    }
+
+    /** Fallback coordinate tap on the Snapchat bottom nav Chat icon (approx 31.6% width, 90.9% height). */
+    private fun tapSnapchatChat(): Boolean = try {
+        val dm = resources.displayMetrics
+        val x = dm.widthPixels * 0.316f
+        val y = dm.heightPixels * 0.909f
+        val path = Path().apply { moveTo(x, y) }
+        dispatchGesture(
+            GestureDescription.Builder()
+                .addStroke(GestureDescription.StrokeDescription(path, 0L, 60L))
+                .build(),
+            null, null
+        )
+    } catch (e: Exception) {
+        Log.w(TAG, "tapSnapchatChat failed: ${e.message}")
+        false
     }
 
     /** Open [uri] inside [pkg]. Pinned to the package so a URL can never fall through to a browser. */
@@ -1036,19 +1073,23 @@ class AppWatcherService : AccessibilityService() {
         val prefix = "$pkg:id/"
         var budget = 4_000
 
+        val dm = resources.displayMetrics
         val screenBounds = Rect()
         fun walk(node: AccessibilityNodeInfo?) {
             if (node == null || budget <= 0) return
             budget--
             val id = node.viewIdResourceName
-            if (id != null && id.startsWith(prefix)) {
-                if (node.isVisibleToUser) {
+            node.getBoundsInScreen(screenBounds)
+            val onScreen = node.isVisibleToUser || (screenBounds.width() > 0 && screenBounds.height() > 0 &&
+                    screenBounds.intersects(0, 0, dm.widthPixels, dm.heightPixels))
+
+            if (onScreen) {
+                if (id != null && id.startsWith(prefix)) {
                     ids.add(id)
-                } else {
-                    node.getBoundsInScreen(screenBounds)
-                    if (screenBounds.width() > 0 && screenBounds.height() > 0) {
-                        ids.add(id)
-                    }
+                }
+                val txt = node.text?.toString()?.trim()
+                if (!txt.isNullOrEmpty() && txt.length in 3..25 && !txt.all { it.isDigit() || it == ':' || it == ' ' }) {
+                    ids.add("text:$txt")
                 }
             }
             for (i in 0 until node.childCount) walk(node.getChild(i))
@@ -1086,6 +1127,24 @@ class AppWatcherService : AccessibilityService() {
      * that names the tab. Instagram gives each tab a distinct id and the index is 0.
      */
     internal fun selectedNavItem(pkg: String): Pair<String, Int>? {
+        if (pkg == "com.snapchat.android") {
+            // Snapchat's custom bottom bar items do not set isSelected or isChecked.
+            // Discriminate active tab by visible screen markers:
+            if (visibleIdPresent(pkg, "com.snapchat.android:id/ff_item") || visibleIdPresent(pkg, "text:Chat")) {
+                return "com.snapchat.android:id/ngs_chat_icon_container" to 0
+            }
+            if (visibleIdPresent(pkg, "com.snapchat.android:id/camera_page") || visibleIdPresent(pkg, "com.snapchat.android:id/camera_capture_button")) {
+                return "com.snapchat.android:id/ngs_camera_icon_container" to 0
+            }
+            if (visibleIdPresent(pkg, "com.snapchat.android:id/df_large_story") || visibleIdPresent(pkg, "com.snapchat.android:id/friend_card_frame") || visibleIdPresent(pkg, "text:Stories")) {
+                return "com.snapchat.android:id/ngs_community_icon_container" to 0
+            }
+            if (visibleIdPresent(pkg, "com.snapchat.android:id/spotlight_container") || visibleIdPresent(pkg, "text:Spotlight")) {
+                return "com.snapchat.android:id/ngs_spotlight_icon_container" to 0
+            }
+            return "com.snapchat.android:id/ngs_chat_icon_container" to 0
+        }
+
         val prefix = "$pkg:id/"
         val byId = LinkedHashMap<String, MutableList<Boolean>>()
         var budget = 3_000

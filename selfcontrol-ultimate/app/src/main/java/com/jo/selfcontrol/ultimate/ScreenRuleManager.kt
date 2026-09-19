@@ -63,13 +63,32 @@ object ScreenRuleManager {
     )
 
     /**
+     * Specific IDs from known apps that appear across multiple or all tabs,
+     * such as global top headers or bottom navigation bar containers.
+     */
+    private val PACKAGE_GENERIC_IDS = setOf(
+        "com.snapchat.android:id/neon_header_avatar",
+        "com.snapchat.android:id/hova_header_search_icon",
+        "com.snapchat.android:id/neon_add_friend_button_container",
+        "com.snapchat.android:id/base_open_view",
+        "com.snapchat.android:id/ptr_container",
+        "com.snapchat.android:id/ngs_map_icon_container",
+        "com.snapchat.android:id/ngs_chat_icon_container",
+        "com.snapchat.android:id/ngs_camera_icon_container",
+        "com.snapchat.android:id/ngs_community_icon_container",
+        "com.snapchat.android:id/ngs_spotlight_icon_container"
+    )
+
+    /**
      * How many words of an id carry screen-specific meaning — `updates_list` scores 1 ("updates"),
      * `button_view` scores 0. Zero means the id is pure furniture and must not become a marker.
      */
-    private fun specificity(id: String): Int =
-        id.substringAfter(":id/")
+    private fun specificity(id: String): Int {
+        if (id.startsWith("text:")) return 10
+        return id.substringAfter(":id/")
             .split('_')
             .count { it.isNotBlank() && it.lowercase() !in GENERIC_WORDS }
+    }
 
     // ──────────────────────────────────────
     //  Model
@@ -149,6 +168,7 @@ object ScreenRuleManager {
         return targetVisible
             .asSequence()
             .filter { id -> id !in onAllowed }
+            .filter { id -> id !in PACKAGE_GENERIC_IDS }
             .filter { id -> GENERIC_ID_SUFFIXES.none { id.endsWith(it) } }
             // Reject furniture outright: an id whose every word names a kind of view was on screen by
             // coincidence, not because of where the user was.

@@ -188,70 +188,82 @@ class ConfigManager {
             }
         }
 
+        fun appLimitToJson(limit: AppLimit): JSONObject {
+            return JSONObject().apply {
+                put("package", limit.packageName)
+                put("max_minutes_per_day", limit.maxMinutesPerDay)
+                put("max_seconds_per_day", limit.maxSecondsPerDay)
+                put("allowed_days", if (limit.allowedDays.size == 7) "*" else org.json.JSONArray(limit.allowedDays))
+                val hours = if (limit.allDay) "*" else String.format(
+                    "%02d:%02d-%02d:%02d",
+                    limit.allowedHoursStart / 60, limit.allowedHoursStart % 60,
+                    limit.allowedHoursEnd / 60, limit.allowedHoursEnd % 60
+                )
+                put("allowed_hours", hours)
+                limit.session?.let {
+                    put("session", JSONObject().apply {
+                        put("session_duration_sec", it.sessionDurationSec)
+                        put("cooldown_sec", it.cooldownSec)
+                        put("max_sessions_per_day", it.maxSessionsPerDay)
+                    })
+                }
+                limit.protectionDelaySec?.let { put("protection_delay_sec", it) }
+
+                val cbArray = org.json.JSONArray()
+                for (cb in limit.channelBlocks) {
+                    cbArray.put(JSONObject().apply {
+                        put("bad_page_keyword", cb.badPageKeyword)
+                        put("redirect_button_text", cb.redirectButtonText)
+                    })
+                }
+                put("channel_blocks", cbArray)
+            }
+        }
+
+        fun periodBlockRuleToJson(rule: PeriodBlockRule): JSONObject {
+            val pkgArr = org.json.JSONArray()
+            for (p in rule.packages) pkgArr.put(p)
+            val hours = String.format(
+                "%02d:%02d-%02d:%02d",
+                rule.blockedStartMinutes / 60, rule.blockedStartMinutes % 60,
+                rule.blockedEndMinutes / 60, rule.blockedEndMinutes % 60
+            )
+            return JSONObject().apply {
+                put("packages", pkgArr)
+                put("blocked_hours", hours)
+                put("blocked_days", if (rule.allowedDays.size == 7) "*" else org.json.JSONArray(rule.allowedDays))
+                put("mute_notifications", rule.muteNotifications)
+                rule.protectionDelaySec?.let { put("protection_delay_sec", it) }
+            }
+        }
+
+        fun installBlockGroupToJson(group: InstallBlockGroup): JSONObject {
+            val pkgArr = org.json.JSONArray()
+            for (p in group.packages) pkgArr.put(p)
+            return JSONObject().apply {
+                put("name", group.name)
+                put("packages", pkgArr)
+                group.protectionDelaySec?.let { put("protection_delay_sec", it) }
+            }
+        }
+
         private fun buildConfigJson(config: Config): JSONObject {
             val json = JSONObject()
             val limitsArray = org.json.JSONArray()
             for (limit in config.limits) {
-                val obj = JSONObject().apply {
-                    put("package", limit.packageName)
-                    put("max_minutes_per_day", limit.maxMinutesPerDay)
-                    put("max_seconds_per_day", limit.maxSecondsPerDay)
-                    put("allowed_days", if (limit.allowedDays.size == 7) "*" else org.json.JSONArray(limit.allowedDays))
-                    val hours = if (limit.allDay) "*" else String.format(
-                        "%02d:%02d-%02d:%02d",
-                        limit.allowedHoursStart / 60, limit.allowedHoursStart % 60,
-                        limit.allowedHoursEnd / 60, limit.allowedHoursEnd % 60
-                    )
-                    put("allowed_hours", hours)
-                    limit.session?.let {
-                        put("session", JSONObject().apply {
-                            put("session_duration_sec", it.sessionDurationSec)
-                            put("cooldown_sec", it.cooldownSec)
-                            put("max_sessions_per_day", it.maxSessionsPerDay)
-                        })
-                    }
-                    limit.protectionDelaySec?.let { put("protection_delay_sec", it) }
-                    
-                    val cbArray = org.json.JSONArray()
-                    for (cb in limit.channelBlocks) {
-                        cbArray.put(JSONObject().apply {
-                            put("bad_page_keyword", cb.badPageKeyword)
-                            put("redirect_button_text", cb.redirectButtonText)
-                        })
-                    }
-                    put("channel_blocks", cbArray)
-                }
-                limitsArray.put(obj)
+                limitsArray.put(appLimitToJson(limit))
             }
             json.put("limits", limitsArray)
+
             val pbArray = org.json.JSONArray()
             for (rule in config.periodBlocks) {
-                val pkgArr = org.json.JSONArray()
-                for (p in rule.packages) pkgArr.put(p)
-                val hours = String.format(
-                    "%02d:%02d-%02d:%02d",
-                    rule.blockedStartMinutes / 60, rule.blockedStartMinutes % 60,
-                    rule.blockedEndMinutes / 60, rule.blockedEndMinutes % 60
-                )
-                pbArray.put(JSONObject().apply {
-                    put("packages", pkgArr)
-                    put("blocked_hours", hours)
-                    put("blocked_days", if (rule.allowedDays.size == 7) "*" else org.json.JSONArray(rule.allowedDays))
-                    put("mute_notifications", rule.muteNotifications)
-                    rule.protectionDelaySec?.let { put("protection_delay_sec", it) }
-                })
+                pbArray.put(periodBlockRuleToJson(rule))
             }
             json.put("period_blocks", pbArray)
 
             val ibArray = org.json.JSONArray()
             for (group in config.installBlocks) {
-                val pkgArr = org.json.JSONArray()
-                for (p in group.packages) pkgArr.put(p)
-                ibArray.put(JSONObject().apply {
-                    put("name", group.name)
-                    put("packages", pkgArr)
-                    group.protectionDelaySec?.let { put("protection_delay_sec", it) }
-                })
+                ibArray.put(installBlockGroupToJson(group))
             }
             json.put("install_blocks", ibArray)
             return json
@@ -262,6 +274,40 @@ class ConfigManager {
             if (start == end) return false
             if (start < end) return nowMinutes >= start && nowMinutes < end
             return nowMinutes >= start || nowMinutes < end
+        }
+
+        /**
+         * Calculates the defer requirement specifically for a single app limit.
+         */
+        fun requiredDeferForAppLimit(oldLimit: AppLimit?, newLimit: AppLimit?, globalDelaySec: Int): DeferRequirement {
+            if (oldLimit == null) return DeferRequirement.NONE
+            val candidates = mutableListOf<DeferRequirement>()
+
+            fun add(rulePolicy: Int?, reason: String) {
+                if (rulePolicy != null) {
+                    candidates.add(DeferRequirement(rulePolicy, true, reason))
+                } else if (globalDelaySec > 0) {
+                    candidates.add(DeferRequirement(globalDelaySec, false, reason))
+                }
+            }
+
+            if (newLimit == null) {
+                add(oldLimit.protectionDelaySec, "Limit deleted: ${oldLimit.packageName}")
+            } else {
+                if (newLimit.maxSecondsPerDay > oldLimit.maxSecondsPerDay) {
+                    add(oldLimit.protectionDelaySec, "Quota raised: ${oldLimit.packageName}")
+                }
+                if (isSessionRelaxation(oldLimit.session, newLimit.session)) {
+                    add(oldLimit.protectionDelaySec, "Session relaxed: ${oldLimit.packageName}")
+                }
+                if (isTimerLowered(oldLimit.protectionDelaySec, newLimit.protectionDelaySec)) {
+                    add(oldLimit.protectionDelaySec, "Protection timer lowered: ${oldLimit.packageName}")
+                }
+            }
+
+            return candidates.maxWithOrNull(
+                compareBy<DeferRequirement> { it.seconds }.thenBy { it.fromExplicitTimer }
+            ) ?: DeferRequirement.NONE
         }
 
         /**
@@ -406,74 +452,116 @@ class ConfigManager {
             }
         }
 
+        fun parseAppLimit(obj: JSONObject): AppLimit {
+            val pkg = obj.getString("package")
+            val maxMin = obj.optInt("max_minutes_per_day", 0)
+            val maxSec = if (obj.has("max_seconds_per_day")) {
+                obj.getInt("max_seconds_per_day")
+            } else {
+                maxMin * 60
+            }
+
+            // Parse allowed_days
+            val allowedDays = when (val days = obj.opt("allowed_days")) {
+                is String -> if (days == "*") (0..6).toList() else listOf()
+                else -> {
+                    val arr = obj.optJSONArray("allowed_days")
+                    if (arr != null) (0 until arr.length()).map { arr.getInt(it) } else (0..6).toList()
+                }
+            }
+
+            // Parse allowed_hours
+            val hoursStr = obj.optString("allowed_hours", "*")
+            val allDay = hoursStr == "*"
+            var startMinutes = 0
+            var endMinutes = 1440 // 24h
+
+            if (!allDay && hoursStr.contains("-")) {
+                val parts = hoursStr.split("-")
+                startMinutes = parseTimeToMinutes(parts[0])
+                endMinutes = parseTimeToMinutes(parts[1])
+            }
+
+            val sessionObj = obj.optJSONObject("session")
+            val sessionConfig = if (sessionObj != null) {
+                SessionConfig(
+                    sessionDurationSec = sessionObj.getInt("session_duration_sec"),
+                    cooldownSec = sessionObj.getInt("cooldown_sec"),
+                    maxSessionsPerDay = sessionObj.getInt("max_sessions_per_day")
+                )
+            } else null
+
+            val channelBlocks = mutableListOf<ChannelBlock>()
+            val cbArr = obj.optJSONArray("channel_blocks")
+            if (cbArr != null) {
+                for (j in 0 until cbArr.length()) {
+                    val cbObj = cbArr.getJSONObject(j)
+                    channelBlocks.add(ChannelBlock(
+                        badPageKeyword = cbObj.getString("bad_page_keyword"),
+                        redirectButtonText = cbObj.getString("redirect_button_text")
+                    ))
+                }
+            }
+
+            return AppLimit(
+                packageName = pkg,
+                maxMinutesPerDay = maxMin,
+                maxSecondsPerDay = maxSec,
+                allowedDays = allowedDays,
+                allowedHoursStart = startMinutes,
+                allowedHoursEnd = endMinutes,
+                allDay = allDay,
+                session = sessionConfig,
+                protectionDelaySec = parseProtectionDelay(obj),
+                channelBlocks = channelBlocks
+            )
+        }
+
+        fun parsePeriodBlockRule(obj: JSONObject): PeriodBlockRule? {
+            val pkgsArr = obj.optJSONArray("packages") ?: return null
+            val pkgs = (0 until pkgsArr.length()).map { pkgsArr.getString(it) }
+            val blockedDays = when (val days = obj.opt("blocked_days")) {
+                is String -> if (days == "*") (0..6).toList() else emptyList()
+                else -> {
+                    val arr = obj.optJSONArray("blocked_days")
+                    if (arr != null) {
+                        (0 until arr.length()).map { arr.getInt(it) }
+                    } else {
+                        (0..6).toList()
+                    }
+                }
+            }
+            val hoursStr = obj.optString("blocked_hours", "")
+            if (hoursStr != "*" && hoursStr.contains("-")) {
+                val parts = hoursStr.split("-")
+                val start = parseTimeToMinutes(parts[0])
+                val end = parseTimeToMinutes(parts[1])
+                val muteNotif = obj.optBoolean("mute_notifications", false)
+                return PeriodBlockRule(
+                    pkgs, start, end, blockedDays, muteNotif,
+                    parseProtectionDelay(obj)
+                )
+            }
+            return null
+        }
+
+        fun parseInstallBlockGroup(obj: JSONObject): InstallBlockGroup? {
+            val name = obj.optString("name").trim()
+            if (name.isEmpty()) return null
+            val pkgsArr = obj.optJSONArray("packages") ?: org.json.JSONArray()
+            val pkgs = (0 until pkgsArr.length())
+                .map { pkgsArr.getString(it).trim() }
+                .filter { it.isNotEmpty() }
+                .distinct()
+            return InstallBlockGroup(name, pkgs, parseProtectionDelay(obj))
+        }
+
         private fun parseConfig(json: JSONObject): Config {
             val limitsArray = json.optJSONArray("limits") ?: org.json.JSONArray()
             val limits = mutableListOf<AppLimit>()
-
             for (i in 0 until limitsArray.length()) {
                 val obj = limitsArray.getJSONObject(i)
-                val pkg = obj.getString("package")
-                val maxMin = obj.optInt("max_minutes_per_day", 0)
-                val maxSec = if (obj.has("max_seconds_per_day")) {
-                    obj.getInt("max_seconds_per_day")
-                } else {
-                    maxMin * 60
-                }
-
-                // Parse allowed_days
-                val allowedDays = when (val days = obj.get("allowed_days")) {
-                    is String -> if (days == "*") (0..6).toList() else listOf()
-                    else -> {
-                        val arr = obj.getJSONArray("allowed_days")
-                        (0 until arr.length()).map { arr.getInt(it) }
-                    }
-                }
-
-                // Parse allowed_hours
-                val hoursStr = obj.getString("allowed_hours")
-                val allDay = hoursStr == "*"
-                var startMinutes = 0
-                var endMinutes = 1440 // 24h
-
-                if (!allDay && hoursStr.contains("-")) {
-                    val parts = hoursStr.split("-")
-                    startMinutes = parseTimeToMinutes(parts[0])
-                    endMinutes = parseTimeToMinutes(parts[1])
-                }
-
-                val sessionObj = obj.optJSONObject("session")
-                val sessionConfig = if (sessionObj != null) {
-                    SessionConfig(
-                        sessionDurationSec = sessionObj.getInt("session_duration_sec"),
-                        cooldownSec = sessionObj.getInt("cooldown_sec"),
-                        maxSessionsPerDay = sessionObj.getInt("max_sessions_per_day")
-                    )
-                } else null
-
-                val channelBlocks = mutableListOf<ChannelBlock>()
-                val cbArr = obj.optJSONArray("channel_blocks")
-                if (cbArr != null) {
-                    for (j in 0 until cbArr.length()) {
-                        val cbObj = cbArr.getJSONObject(j)
-                        channelBlocks.add(ChannelBlock(
-                            badPageKeyword = cbObj.getString("bad_page_keyword"),
-                            redirectButtonText = cbObj.getString("redirect_button_text")
-                        ))
-                    }
-                }
-
-                limits.add(AppLimit(
-                    packageName = pkg,
-                    maxMinutesPerDay = maxMin,
-                    maxSecondsPerDay = maxSec,
-                    allowedDays = allowedDays,
-                    allowedHoursStart = startMinutes,
-                    allowedHoursEnd = endMinutes,
-                    allDay = allDay,
-                    session = sessionConfig,
-                    protectionDelaySec = parseProtectionDelay(obj),
-                    channelBlocks = channelBlocks
-                ))
+                runCatching { parseAppLimit(obj) }.getOrNull()?.let { limits.add(it) }
             }
 
             val periodBlocks = mutableListOf<PeriodBlockRule>()
@@ -481,32 +569,7 @@ class ConfigManager {
             if (pbArr != null) {
                 for (i in 0 until pbArr.length()) {
                     val obj = pbArr.getJSONObject(i)
-                    val pkgsArr = obj.getJSONArray("packages")
-                    val pkgs = (0 until pkgsArr.length()).map { pkgsArr.getString(it) }
-                    val blockedDays = when (val days = obj.opt("blocked_days")) {
-                        is String -> if (days == "*") (0..6).toList() else emptyList()
-                        else -> {
-                            val arr = obj.optJSONArray("blocked_days")
-                            if (arr != null) {
-                                (0 until arr.length()).map { arr.getInt(it) }
-                            } else {
-                                (0..6).toList()
-                            }
-                        }
-                    }
-                    val hoursStr = obj.getString("blocked_hours")
-                    if (hoursStr != "*" && hoursStr.contains("-")) {
-                        val parts = hoursStr.split("-")
-                        val start = parseTimeToMinutes(parts[0])
-                        val end = parseTimeToMinutes(parts[1])
-                        val muteNotif = obj.optBoolean("mute_notifications", false)
-                        periodBlocks.add(
-                            PeriodBlockRule(
-                                pkgs, start, end, blockedDays, muteNotif,
-                                parseProtectionDelay(obj)
-                            )
-                        )
-                    }
+                    runCatching { parsePeriodBlockRule(obj) }.getOrNull()?.let { periodBlocks.add(it) }
                 }
             }
 
@@ -515,14 +578,7 @@ class ConfigManager {
             if (ibArr != null) {
                 for (i in 0 until ibArr.length()) {
                     val obj = ibArr.getJSONObject(i)
-                    val name = obj.optString("name").trim()
-                    if (name.isEmpty()) continue
-                    val pkgsArr = obj.optJSONArray("packages") ?: org.json.JSONArray()
-                    val pkgs = (0 until pkgsArr.length())
-                        .map { pkgsArr.getString(it).trim() }
-                        .filter { it.isNotEmpty() }
-                        .distinct()
-                    installBlocks.add(InstallBlockGroup(name, pkgs, parseProtectionDelay(obj)))
+                    runCatching { parseInstallBlockGroup(obj) }.getOrNull()?.let { installBlocks.add(it) }
                 }
             }
 
