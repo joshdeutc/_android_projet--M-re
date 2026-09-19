@@ -287,12 +287,14 @@ class CommandReceiver : BroadcastReceiver() {
             Log.e("SelfControl.Cmd", "REQUEST_WHITELIST_APP: missing --es pkg")
             return
         }
-        val delaySec = if (intent.hasExtra("hours")) {
+        val delaySec = if (intent.hasExtra("delaySec")) {
+            intent.getLongExtra("delaySec", 0L)
+        } else if (intent.hasExtra("hours")) {
             intent.getIntExtra("hours", 24) * 3600L
         } else {
             WhitelistManager.getEffectiveQuarantineDelaySeconds(context)
         }
-        val ok = WhitelistManager.requestAppAddition(context, pkg, delaySec)
+        val ok = WhitelistManager.requestAppAddition(context, pkg, delaySec, fromAdb = true)
         val hours = delaySec / 3600L
         Log.w("SelfControl.Cmd", "=== REQUEST_WHITELIST_APP $pkg ($hours h / ${delaySec}s) → ${if (ok) "QUEUED" else "IGNORED"} ===")
     }

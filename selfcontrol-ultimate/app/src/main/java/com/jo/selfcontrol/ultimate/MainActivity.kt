@@ -287,13 +287,26 @@ class MainActivity : Activity() {
             gravity = Gravity.CENTER_VERTICAL
         }
         requestWhitelistAppButton = android.widget.Button(this@MainActivity).apply {
-            val sec = WhitelistManager.getEffectiveQuarantineDelaySeconds(this@MainActivity)
-            val hours = WhitelistManager.getEffectiveQuarantineDelayHours(this@MainActivity)
-            val tag = if (sec >= 3600) "${hours}h" else "${sec / 60}m"
-            text = "+ Demander une app ($tag)"
-            setTextColor(Color.WHITE)
-            background = roundedBackground(Color.BLACK)
-            setOnClickListener { showRequestWhitelistAppDialog() }
+            if (BuildConfig.WHITELIST_ADB_ONLY) {
+                text = "🔒 Whitelist gérée via ADB"
+                setTextColor(Color.parseColor("#B0BEC5"))
+                background = roundedBackground(Color.parseColor("#263238"))
+                setOnClickListener {
+                    AlertDialog.Builder(this@MainActivity, android.R.style.Theme_DeviceDefault_Dialog)
+                        .setTitle("Whitelist gérée via ADB")
+                        .setMessage("Sur cette version, les applications autorisées sont configurées exclusivement par l'administrateur depuis un ordinateur via ADB.")
+                        .setPositiveButton("Compris", null)
+                        .show()
+                }
+            } else {
+                val sec = WhitelistManager.getEffectiveQuarantineDelaySeconds(this@MainActivity)
+                val hours = WhitelistManager.getEffectiveQuarantineDelayHours(this@MainActivity)
+                val tag = if (sec >= 3600) "${hours}h" else "${sec / 60}m"
+                text = "+ Demander une app ($tag)"
+                setTextColor(Color.WHITE)
+                background = roundedBackground(Color.BLACK)
+                setOnClickListener { showRequestWhitelistAppDialog() }
+            }
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         }
         installHeader.addView(requestWhitelistAppButton)
@@ -2095,6 +2108,15 @@ class MainActivity : Activity() {
     }
 
     private fun showRequestWhitelistAppDialog() {
+        if (BuildConfig.WHITELIST_ADB_ONLY) {
+            AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog)
+                .setTitle("Ajout restreint")
+                .setMessage("Sur cette version, l'ajout d'applications autorisées est administré exclusivement via ADB.\n\nDemandez à l'administrateur d'autoriser l'application depuis son ordinateur.")
+                .setPositiveButton("Compris", null)
+                .show()
+            return
+        }
+
         val state = WhitelistManager.loadState(this)
         val hiddenPackages = WhitelistManager.loadHiddenState(this)
         val pm = packageManager
@@ -2172,6 +2194,11 @@ class MainActivity : Activity() {
     }
 
     private fun confirmRequestAddition(pkg: String, label: String) {
+        if (BuildConfig.WHITELIST_ADB_ONLY) {
+            Toast.makeText(this, "Ajout restreint : administré via ADB uniquement", Toast.LENGTH_LONG).show()
+            return
+        }
+
         val delaySec = WhitelistManager.getEffectiveQuarantineDelaySeconds(this)
         val delayHours = WhitelistManager.getEffectiveQuarantineDelayHours(this)
         val delayText = if (delaySec >= 3600) "${delayHours} heure(s)" else "${delaySec / 60} minute(s)"

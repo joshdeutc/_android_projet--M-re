@@ -80,16 +80,22 @@ object DeviceOwnerHelper {
             Log.i(TAG, "Install restrictions cleared (delegated to WhitelistManager)")
         }
 
-        // 6. Prevent factory reset (blocks Settings option and sometimes recovery)
-        runCatching {
-            d.addUserRestriction(a, UserManager.DISALLOW_FACTORY_RESET)
-            Log.i(TAG, "Restriction added: DISALLOW_FACTORY_RESET")
-        }
-
-        // 7. Prevent booting into Safe Mode (where A11Y services are disabled)
-        runCatching {
-            d.addUserRestriction(a, UserManager.DISALLOW_SAFE_BOOT)
-            Log.i(TAG, "Restriction added: DISALLOW_SAFE_BOOT")
+        // 6. Security restrictions: Factory reset and Safe mode (only if hard restrictions enabled)
+        if (BuildConfig.HARD_SECURITY_RESTRICTIONS) {
+            runCatching {
+                d.addUserRestriction(a, UserManager.DISALLOW_FACTORY_RESET)
+                Log.i(TAG, "Restriction added: DISALLOW_FACTORY_RESET")
+            }
+            runCatching {
+                d.addUserRestriction(a, UserManager.DISALLOW_SAFE_BOOT)
+                Log.i(TAG, "Restriction added: DISALLOW_SAFE_BOOT")
+            }
+        } else {
+            runCatching {
+                d.clearUserRestriction(a, UserManager.DISALLOW_FACTORY_RESET)
+                d.clearUserRestriction(a, UserManager.DISALLOW_SAFE_BOOT)
+                Log.i(TAG, "Hard security restrictions cleared (flavor with standard OS behavior)")
+            }
         }
     }
 
@@ -158,6 +164,7 @@ object DeviceOwnerHelper {
      * false if caller must fall back to HOME spam via AccessibilityService.
      */
     fun suspendApp(ctx: Context, pkg: String): Boolean {
+        if (!BuildConfig.OS_SUSPENSION_ENABLED) return false
         if (!isDeviceOwner(ctx)) return false
         return runCatching {
             val failed = dpm(ctx).setPackagesSuspended(admin(ctx), arrayOf(pkg), true)
@@ -170,6 +177,7 @@ object DeviceOwnerHelper {
     }
 
     fun unsuspendApp(ctx: Context, pkg: String): Boolean {
+        if (!BuildConfig.OS_SUSPENSION_ENABLED) return false
         if (!isDeviceOwner(ctx)) return false
         return runCatching {
             dpm(ctx).setPackagesSuspended(admin(ctx), arrayOf(pkg), false)
@@ -225,6 +233,7 @@ object DeviceOwnerHelper {
 
     /** Hide an app entirely (used for Nuclear Mode OS-level enforcement). */
     fun hideApp(ctx: Context, pkg: String, hidden: Boolean): Boolean {
+        if (!BuildConfig.OS_SUSPENSION_ENABLED) return false
         if (!isDeviceOwner(ctx)) return false
         return runCatching {
             dpm(ctx).setApplicationHidden(admin(ctx), pkg, hidden)

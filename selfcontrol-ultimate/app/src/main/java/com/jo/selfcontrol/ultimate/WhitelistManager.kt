@@ -830,8 +830,13 @@ object WhitelistManager {
     fun requestAppAddition(
         ctx: Context,
         pkg: String,
-        delaySeconds: Long = getEffectiveQuarantineDelaySeconds(ctx)
+        delaySeconds: Long = getEffectiveQuarantineDelaySeconds(ctx),
+        fromAdb: Boolean = false
     ): Boolean {
+        if (BuildConfig.WHITELIST_ADB_ONLY && !fromAdb) {
+            Log.w(TAG, "Refused UI whitelist request: flavor requires ADB ($pkg)")
+            return false
+        }
         val cleanPkg = sanitizePackageName(pkg)
         if (cleanPkg.isBlank()) return false
         val state = loadState(ctx)
@@ -839,24 +844,36 @@ object WhitelistManager {
             Log.i(TAG, "App $cleanPkg already in whitelist.")
             return false
         }
+        val now = System.currentTimeMillis()
+        if (delaySeconds <= 0L) {
+            val updated = state.allowedPackages + cleanPkg
+            val filteredPending = state.pendingRequests.filterNot { it.packageName == cleanPkg }
+            saveState(ctx, state.copy(allowedPackages = updated, pendingRequests = filteredPending))
+            release(ctx, cleanPkg)
+            val hidden = loadHiddenState(ctx).toMutableSet()
+            hidden.remove(cleanPkg)
+            saveHiddenState(ctx, hidden)
+            Log.w(TAG, "Immediately added $cleanPkg to whitelist (delaySec=0)")
+            EventLog.log(ctx, "WHITELIST", "Immediately added $cleanPkg to whitelist (fromAdb=$fromAdb)")
+            return true
+        }
         val existing = state.pendingRequests.find { it.packageName == cleanPkg }
         if (existing != null) {
             Log.i(TAG, "App $cleanPkg already pending until ${java.util.Date(existing.availableAt)}")
             return false
         }
-        val now = System.currentTimeMillis()
         val availableAt = now + delaySeconds * 1000L
         val newPending = state.pendingRequests + PendingRequest(cleanPkg, now, availableAt)
         saveState(ctx, state.copy(pendingRequests = newPending))
         scheduleNextUnlockAlarm(ctx)
         val hours = delaySeconds / 3600L
         Log.w(TAG, "Added $cleanPkg to quarantine. Available in ${delaySeconds}s / ${hours}h (at ${java.util.Date(availableAt)})")
-        EventLog.log(ctx, "WHITELIST", "Requested $cleanPkg addition with ${delaySeconds}s delay")
+        EventLog.log(ctx, "WHITELIST", "Requested $cleanPkg addition with ${delaySeconds}s delay (fromAdb=$fromAdb)")
         return true
     }
 
-    fun requestAppAddition(ctx: Context, pkg: String, delayHours: Int): Boolean {
-        return requestAppAddition(ctx, pkg, delayHours * 3600L)
+    fun requestAppAddition(ctx: Context, pkg: String, delayHours: Int, fromAdb: Boolean = false): Boolean {
+        return requestAppAddition(ctx, pkg, delayHours * 3600L, fromAdb)
     }
 
     /**

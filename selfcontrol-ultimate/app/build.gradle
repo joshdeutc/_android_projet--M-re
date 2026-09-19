@@ -17,6 +17,10 @@ android {
         // default and only enabled for the `me` developer flavor below. Other flavors ship without
         // any foreground-activity logging.
         buildConfigField "boolean", "EVENT_LOG_ENABLED", "false"
+        buildConfigField "boolean", "OS_SUSPENSION_ENABLED", "true"
+        buildConfigField "boolean", "HARD_SECURITY_RESTRICTIONS", "true"
+        buildConfigField "boolean", "PERMANENT_SCREEN_RULES", "false"
+        buildConfigField "boolean", "WHITELIST_ADB_ONLY", "false"
     }
 
     buildFeatures {
@@ -29,16 +33,28 @@ android {
             dimension "level"
             buildConfigField "int", "LEVEL", "0"
             buildConfigField "String", "LEVEL_NAME", "\"basic\""
+            buildConfigField "boolean", "OS_SUSPENSION_ENABLED", "false"
+            buildConfigField "boolean", "HARD_SECURITY_RESTRICTIONS", "false"
+            buildConfigField "boolean", "PERMANENT_SCREEN_RULES", "false"
+            buildConfigField "boolean", "WHITELIST_ADB_ONLY", "false"
         }
         admin {
             dimension "level"
             buildConfigField "int", "LEVEL", "1"
             buildConfigField "String", "LEVEL_NAME", "\"admin\""
+            buildConfigField "boolean", "OS_SUSPENSION_ENABLED", "false"
+            buildConfigField "boolean", "HARD_SECURITY_RESTRICTIONS", "false"
+            buildConfigField "boolean", "PERMANENT_SCREEN_RULES", "false"
+            buildConfigField "boolean", "WHITELIST_ADB_ONLY", "false"
         }
         deviceAdmin {
             dimension "level"
             buildConfigField "int", "LEVEL", "2"
             buildConfigField "String", "LEVEL_NAME", "\"deviceAdmin\""
+            buildConfigField "boolean", "OS_SUSPENSION_ENABLED", "true"
+            buildConfigField "boolean", "HARD_SECURITY_RESTRICTIONS", "true"
+            buildConfigField "boolean", "PERMANENT_SCREEN_RULES", "false"
+            buildConfigField "boolean", "WHITELIST_ADB_ONLY", "false"
         }
         me {
             dimension "level"
@@ -46,17 +62,35 @@ android {
             buildConfigField "String", "LEVEL_NAME", "\"me\""
             // Developer/debug flavor only: enable the persistent event log for diagnostics.
             buildConfigField "boolean", "EVENT_LOG_ENABLED", "true"
+            buildConfigField "boolean", "OS_SUSPENSION_ENABLED", "true"
+            buildConfigField "boolean", "HARD_SECURITY_RESTRICTIONS", "true"
+            buildConfigField "boolean", "PERMANENT_SCREEN_RULES", "true"
+            buildConfigField "boolean", "WHITELIST_ADB_ONLY", "false"
+        }
+        brother {
+            dimension "level"
+            buildConfigField "int", "LEVEL", "4"
+            buildConfigField "String", "LEVEL_NAME", "\"brother\""
+            // Light Device Owner: permanent screen rules, anti-uninstall, ADB-only whitelist,
+            // but behaves like basic for app limits (no OS suspension, no factory reset or safe boot block).
+            buildConfigField "boolean", "EVENT_LOG_ENABLED", "true"
+            buildConfigField "boolean", "OS_SUSPENSION_ENABLED", "false"
+            buildConfigField "boolean", "HARD_SECURITY_RESTRICTIONS", "false"
+            buildConfigField "boolean", "PERMANENT_SCREEN_RULES", "true"
+            buildConfigField "boolean", "WHITELIST_ADB_ONLY", "true"
         }
     }
 
     // Blocking engine (a11y, LimitService, SessionManager, ...) lives in src/main/ and
-    // is shared by all 4 flavors. Each flavor adds only its anti-bypass differentiator:
+    // is shared by all flavors. Each flavor adds only its anti-bypass differentiator:
     //   basic       → nothing extra (uninstallable normally)
     //   admin       → + AdminReceiver as legacy DeviceAdminReceiver (must deactivate first)
     //   deviceAdmin → + DPM Device Owner + CommandReceiver + Knox perms (factory-reset to remove)
     //   me          → reuses deviceAdmin's manifest; future root hooks in src/me/java/
+    //   brother     → reuses deviceAdmin's manifest; DO anti-uninstall with basic enforcement
     sourceSets {
         me.manifest.srcFile 'src/deviceAdmin/AndroidManifest.xml'
+        brother.manifest.srcFile 'src/deviceAdmin/AndroidManifest.xml'
     }
 
     buildTypes {

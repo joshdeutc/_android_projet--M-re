@@ -131,7 +131,7 @@ object ScreenRuleManager {
      * that removed the tolerance window from the watchdog rather than zeroing it. On every other
      * (commercial) flavor removal is allowed but gated by the personal and general delays.
      */
-    val PERMANENT_ON_THIS_FLAVOR: Boolean = BuildConfig.LEVEL == 3
+    val PERMANENT_ON_THIS_FLAVOR: Boolean = BuildConfig.PERMANENT_SCREEN_RULES
 
     /** Outcome of a removal request, so the UI can explain what happened. */
     sealed class RemovalOutcome {
