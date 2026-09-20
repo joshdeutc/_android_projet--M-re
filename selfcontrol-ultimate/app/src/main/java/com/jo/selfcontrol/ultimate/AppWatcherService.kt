@@ -136,7 +136,8 @@ class AppWatcherService : AccessibilityService() {
          * behind this gate, and the check itself is now a handful of native id lookups rather than a
          * tree walk.
          */
-        private const val INSTAGRAM_SCAN_INTERVAL_MS = 500L
+        private const val INSTAGRAM_SCAN_INTERVAL_MS = 150L
+        private const val SCREEN_RULE_SCAN_INTERVAL_MS = 150L
 
         /** The bottom-bar messages tab — the thing we tap to perform the redirect. */
         private const val INSTAGRAM_DIRECT_TAB_VIEW_ID = "com.instagram.android:id/direct_tab"
@@ -172,7 +173,8 @@ class AppWatcherService : AccessibilityService() {
         private const val INSTAGRAM_INBOX_URI = "https://www.instagram.com/direct/inbox/"
 
         /** Long enough that one redirect settles before the next content event triggers another. */
-        private const val INSTAGRAM_REDIRECT_COOLDOWN_MS = 1_500L
+        private const val INSTAGRAM_REDIRECT_COOLDOWN_MS = 500L
+        private const val SCREEN_RULE_REDIRECT_COOLDOWN_MS = 500L
 
         @Volatile
         var currentForegroundApp: String = "unknown"
@@ -797,6 +799,7 @@ class AppWatcherService : AccessibilityService() {
     private var screenRulesStamp = 0L
     private var screenRulesCheckedAt = 0L
     private var lastScreenRuleActionAt = 0L
+    private var lastScreenRuleScanAt = 0L
 
     /**
      * Apply the rules taught by [ScreenLearnSession] to [pkg], returning true if the user was moved.
@@ -811,7 +814,9 @@ class AppWatcherService : AccessibilityService() {
      */
     internal fun enforceScreenRules(pkg: String): Boolean {
         val now = System.currentTimeMillis()
-        if (now - lastScreenRuleActionAt < INSTAGRAM_REDIRECT_COOLDOWN_MS) return false
+        if (now - lastScreenRuleActionAt < SCREEN_RULE_REDIRECT_COOLDOWN_MS) return false
+        if (now - lastScreenRuleScanAt < SCREEN_RULE_SCAN_INTERVAL_MS) return false
+        lastScreenRuleScanAt = now
 
         reloadScreenRulesIfStale(now)
         val rules = screenRules.filter { it.packageName == pkg }
