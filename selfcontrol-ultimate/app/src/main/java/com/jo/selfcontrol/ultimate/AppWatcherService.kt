@@ -136,8 +136,8 @@ class AppWatcherService : AccessibilityService() {
          * behind this gate, and the check itself is now a handful of native id lookups rather than a
          * tree walk.
          */
-        private const val INSTAGRAM_SCAN_INTERVAL_MS = 150L
-        private const val SCREEN_RULE_SCAN_INTERVAL_MS = 150L
+        private const val INSTAGRAM_SCAN_INTERVAL_MS = 80L
+        private const val SCREEN_RULE_SCAN_INTERVAL_MS = 80L
 
         /** The bottom-bar messages tab — the thing we tap to perform the redirect. */
         private const val INSTAGRAM_DIRECT_TAB_VIEW_ID = "com.instagram.android:id/direct_tab"
@@ -562,7 +562,7 @@ class AppWatcherService : AccessibilityService() {
                 Log.i(TAG, "Instagram DM tab bounds=$bounds → tap ${bounds.exactCenterX()},${bounds.exactCenterY()}")
                 val path = Path().apply { moveTo(bounds.exactCenterX(), bounds.exactCenterY()) }
                 val gesture = GestureDescription.Builder()
-                    .addStroke(GestureDescription.StrokeDescription(path, 0L, 50L))
+                    .addStroke(GestureDescription.StrokeDescription(path, 0L, 10L))
                     .build()
                 dispatchGesture(gesture, null, null)
             }
@@ -943,7 +943,7 @@ class AppWatcherService : AccessibilityService() {
         val path = Path().apply { moveTo(x, y) }
         dispatchGesture(
             GestureDescription.Builder()
-                .addStroke(GestureDescription.StrokeDescription(path, 0L, 60L))
+                .addStroke(GestureDescription.StrokeDescription(path, 0L, 10L))
                 .build(),
             null, null
         )
@@ -1197,16 +1197,7 @@ class AppWatcherService : AccessibilityService() {
 
     /** Tap the centre of the [index]-th visible node carrying [viewId] in [pkg]. */
     internal fun tapNavItem(pkg: String, viewId: String, index: Int): Boolean {
-        val prefix = "$pkg:id/"
         val matches = mutableListOf<AccessibilityNodeInfo>()
-        var budget = 4_000
-
-        fun walk(node: AccessibilityNodeInfo?) {
-            if (node == null || budget <= 0) return
-            budget--
-            if (node.viewIdResourceName == viewId) matches.add(node)
-            for (i in 0 until node.childCount) walk(node.getChild(i))
-        }
 
         try {
             var found = false
@@ -1214,12 +1205,14 @@ class AppWatcherService : AccessibilityService() {
                 val root = window.root ?: continue
                 if (root.packageName?.toString() == pkg) {
                     found = true
-                    walk(root)
+                    matches.addAll(root.findAccessibilityNodeInfosByViewId(viewId) ?: emptyList())
                 }
             }
             if (!found) {
                 rootInActiveWindow?.let { root ->
-                    if (root.packageName?.toString() == pkg) walk(root)
+                    if (root.packageName?.toString() == pkg) {
+                        matches.addAll(root.findAccessibilityNodeInfosByViewId(viewId) ?: emptyList())
+                    }
                 }
             }
         } catch (e: Exception) {
@@ -1253,7 +1246,7 @@ class AppWatcherService : AccessibilityService() {
                 val path = Path().apply { moveTo(bounds.exactCenterX(), bounds.exactCenterY()) }
                 gestured = dispatchGesture(
                     GestureDescription.Builder()
-                        .addStroke(GestureDescription.StrokeDescription(path, 0L, 60L))
+                        .addStroke(GestureDescription.StrokeDescription(path, 0L, 10L))
                         .build(),
                     null, null
                 )
