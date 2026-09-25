@@ -363,6 +363,7 @@ class LimitService : Service() {
                 blockApp(currentApp, "curfew")
                 return
             }
+            AppWatcherService.recheckScreenRules(currentApp)
         }
 
         if (currentApp in InstallWindowManager.INSTALLER_PACKAGES && InstallWindowManager.isOpen(this)) {

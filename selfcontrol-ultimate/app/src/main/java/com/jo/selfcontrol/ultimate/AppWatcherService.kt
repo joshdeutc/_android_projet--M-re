@@ -76,6 +76,50 @@ class AppWatcherService : AccessibilityService() {
         private const val SCREEN_RULE_SCAN_INTERVAL_MS = 80L
         private const val SCREEN_RULE_REDIRECT_COOLDOWN_MS = 500L
 
+        const val INSTAGRAM_PACKAGE = "com.instagram.android"
+
+        private val INSTAGRAM_REDIRECT_IDS = listOf(
+            "com.instagram.android:id/main_feed_action_bar",          // home feed
+            "com.instagram.android:id/explore_action_bar",            // Explore grid
+            "com.instagram.android:id/action_bar_search_edit_text",   // people search
+            "com.instagram.android:id/clips_viewer_container",
+            "com.instagram.android:id/clips_viewer_view_pager",
+            "com.instagram.android:id/clips_expanded_touch_view",
+            "com.instagram.android:id/root_clips_layout",
+            "com.instagram.android:id/clips_swipe_refresh_container",
+            "com.instagram.android:id/clips_video_container"
+        )
+
+        private val INSTAGRAM_PREFER_DEEPLINK_IDS = setOf(
+            "com.instagram.android:id/explore_action_bar",
+            "com.instagram.android:id/action_bar_search_edit_text"
+        )
+
+        private val INSTAGRAM_INBOX_IDS = listOf(
+            "com.instagram.android:id/direct_inbox_action_bar",
+            "com.instagram.android:id/direct_thread_header"
+        )
+
+        private const val INSTAGRAM_SCAN_INTERVAL_MS = 80L
+        private const val INSTAGRAM_DIRECT_TAB_VIEW_ID = "com.instagram.android:id/direct_tab"
+
+        private val INSTAGRAM_TAB_VIEW_IDS = listOf(
+            "com.instagram.android:id/feed_tab",
+            "com.instagram.android:id/clips_tab",
+            INSTAGRAM_DIRECT_TAB_VIEW_ID,
+            "com.instagram.android:id/search_tab",
+            "com.instagram.android:id/profile_tab"
+        )
+
+        private val INSTAGRAM_REDIRECTED_TABS = setOf(
+            "com.instagram.android:id/feed_tab",
+            "com.instagram.android:id/clips_tab",
+            "com.instagram.android:id/search_tab"
+        )
+
+        private const val INSTAGRAM_INBOX_URI = "https://www.instagram.com/direct/inbox/"
+        private const val INSTAGRAM_REDIRECT_COOLDOWN_MS = 500L
+
         @Volatile
         var currentForegroundApp: String = "unknown"
 
@@ -142,6 +186,9 @@ class AppWatcherService : AccessibilityService() {
      */
     private var imePackage: String? = null
     private var lastHomeActionTime = 0L
+    private var lastInstagramBackTime = 0L
+    private var lastInstagramScanTime = 0L
+    private var lastInstagramDiagTime = 0L
 
     private var overlayView: TextView? = null
     private val overlayHandler = Handler(Looper.getMainLooper())
@@ -468,6 +515,15 @@ class AppWatcherService : AccessibilityService() {
         val rules = screenRules.filter { it.packageName == pkg }
         if (rules.isEmpty()) return false
 
+        // Specialized handler for Instagram: if rules exist for Instagram and are active,
+        // use the tuned ViewPager/multi-window aware engine.
+        if (pkg == INSTAGRAM_PACKAGE) {
+            if (isInstagramRuleActive()) {
+                return enforceInstagramRestrictions()
+            }
+            return false
+        }
+
         for (rule in rules) {
             // Check active hours schedule if defined
             if (!isRuleActiveNow(rule)) continue
@@ -480,6 +536,156 @@ class AppWatcherService : AccessibilityService() {
             return true
         }
         return false
+    }
+
+    private fun isInstagramRuleActive(): Boolean {
+        val igRules = screenRules.filter { it.packageName == INSTAGRAM_PACKAGE }
+        if (igRules.isEmpty()) return false
+        return igRules.any { isRuleActiveNow(it) }
+    }
+
+    /**
+     * Keep the official Instagram app on the messages: leaving for the feed, Explore, search or
+     * Reels sends the user straight back to the inbox.
+     */
+    private fun enforceInstagramRestrictions(): Boolean {
+        val now = System.currentTimeMillis()
+        if (now - lastInstagramScanTime < INSTAGRAM_SCAN_INTERVAL_MS) return false
+        lastInstagramScanTime = now
+
+        val root = rootInActiveWindow
+        if (root == null) {
+            diagInstagram("root=null")
+            return false
+        }
+
+        val selectedTab = instagramSelectedTab(root)
+        if (selectedTab == INSTAGRAM_DIRECT_TAB_VIEW_ID) return false
+
+        val hit = when (selectedTab) {
+            in INSTAGRAM_REDIRECTED_TABS -> selectedTab
+            else -> {
+                val veto = INSTAGRAM_INBOX_IDS.firstOrNull { hasViewId(root, it) }
+                if (veto != null) null else INSTAGRAM_REDIRECT_IDS.firstOrNull { hasViewId(root, it) }
+            }
+        }
+        if (hit == null) return false
+
+        if (now - lastInstagramBackTime < INSTAGRAM_REDIRECT_COOLDOWN_MS) {
+            return false
+        }
+        lastInstagramBackTime = now
+        val shortHit = hit.removePrefix("com.instagram.android:id/")
+        Log.w(TAG, "🛡️ Instagram $shortHit → redirect to messages")
+        EventLog.log(this, "IG_REDIRECT", "$shortHit (selectedTab=$selectedTab)")
+
+        val preferredDeeplink = hit in INSTAGRAM_PREFER_DEEPLINK_IDS
+        if (preferredDeeplink && openInstagramInbox()) {
+            return true
+        }
+
+        if (tapInstagramDirectTab()) {
+            return true
+        }
+
+        if (openInstagramInbox()) {
+            return true
+        }
+
+        goHome("instagram_fallback")
+        return true
+    }
+
+    private fun openInstagramInbox(): Boolean = try {
+        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(INSTAGRAM_INBOX_URI)).apply {
+            setPackage(INSTAGRAM_PACKAGE)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        startActivity(intent)
+        true
+    } catch (e: Exception) {
+        Log.w(TAG, "Instagram inbox deep link failed: ${e.message}")
+        false
+    }
+
+    private fun diagInstagram(detail: String) {
+        val now = System.currentTimeMillis()
+        if (now - lastInstagramDiagTime < 2_000L) return
+        lastInstagramDiagTime = now
+        Log.i(TAG, "IG diag: $detail")
+    }
+
+    private fun instagramSelectedTab(root: AccessibilityNodeInfo): String? {
+        for (id in INSTAGRAM_TAB_VIEW_IDS) {
+            val selected = try {
+                root.findAccessibilityNodeInfosByViewId(id)
+                    .any { it.isVisibleToUser && (it.isSelected || it.isChecked) }
+            } catch (e: Exception) {
+                false
+            }
+            if (selected) return id
+        }
+        return null
+    }
+
+    private fun tabStates(root: AccessibilityNodeInfo): String =
+        INSTAGRAM_TAB_VIEW_IDS.joinToString(" ") { id ->
+            val short = id.removePrefix("com.instagram.android:id/")
+            val nodes = try {
+                root.findAccessibilityNodeInfosByViewId(id)
+            } catch (e: Exception) {
+                emptyList()
+            }
+            if (nodes.isEmpty()) "$short=absent"
+            else nodes.joinToString(",") { "$short=s${it.isSelected}/c${it.isChecked}/v${it.isVisibleToUser}" }
+        }
+
+    private fun hasViewId(root: AccessibilityNodeInfo, viewId: String): Boolean = try {
+        root.findAccessibilityNodeInfosByViewId(viewId).any { it.isVisibleToUser }
+    } catch (e: Exception) {
+        false
+    }
+
+    private fun findNodeInAnyWindow(viewId: String): AccessibilityNodeInfo? {
+        try {
+            for (window in windows) {
+                val root = window.root ?: continue
+                root.findAccessibilityNodeInfosByViewId(viewId)
+                    .firstOrNull { it.isVisibleToUser }
+                    ?.let { return it }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "findNodeInAnyWindow($viewId) failed: ${e.message}")
+        }
+        return try {
+            rootInActiveWindow?.findAccessibilityNodeInfosByViewId(viewId)
+                ?.firstOrNull { it.isVisibleToUser }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    private fun tapInstagramDirectTab(): Boolean = try {
+        val icon = findNodeInAnyWindow(INSTAGRAM_DIRECT_TAB_VIEW_ID)
+        if (icon == null) {
+            false
+        } else {
+            val bounds = Rect()
+            icon.getBoundsInScreen(bounds)
+            if (bounds.isEmpty) {
+                false
+            } else {
+                Log.i(TAG, "Instagram DM tab bounds=$bounds → tap ${bounds.exactCenterX()},${bounds.exactCenterY()}")
+                val path = Path().apply { moveTo(bounds.exactCenterX(), bounds.exactCenterY()) }
+                val gesture = GestureDescription.Builder()
+                    .addStroke(GestureDescription.StrokeDescription(path, 0L, 10L))
+                    .build()
+                dispatchGesture(gesture, null, null)
+            }
+        }
+    } catch (e: Exception) {
+        Log.w(TAG, "Instagram DM tab tap failed: ${e.message}")
+        false
     }
 
     private fun isRuleActiveNow(rule: ScreenRuleManager.ScreenRule): Boolean {
