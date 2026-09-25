@@ -66,6 +66,7 @@ class MainActivity : Activity() {
     private var selectedDurationMs = 30 * 60 * 1000L
 
     private var lastRenderedAllowed = emptySet<String>()
+    private var lastRenderedEnabled: Boolean? = null
     private var lastRenderedPending = emptyList<WhitelistManager.PendingRequest>()
     private var lastRenderedDelayHours = -1
     private var lastRenderedUseGlobal = false
@@ -1849,7 +1850,9 @@ class MainActivity : Activity() {
         val allowedCount = state.allowedPackages.size
         val pendingCount = state.pendingRequests.size
 
-        if (pendingCount > 0) {
+        if (!state.enabled) {
+            installBlocklistCircle.setSummaryText("Désactivée · Accès libre")
+        } else if (pendingCount > 0) {
             installBlocklistCircle.setSummaryText("$allowedCount autorisées · $pendingCount en attente")
         } else {
             installBlocklistCircle.setSummaryText("$allowedCount apps autorisées")
@@ -1875,7 +1878,8 @@ class MainActivity : Activity() {
 
         val currentSecond = System.currentTimeMillis() / 1000
         val needTimeRefresh = pendingCount > 0 && (currentSecond - lastPendingUpdateSecond >= 30)
-        val stateChanged = displayAllowed != lastRenderedAllowed ||
+        val stateChanged = state.enabled != lastRenderedEnabled ||
+            displayAllowed != lastRenderedAllowed ||
             state.pendingRequests != lastRenderedPending ||
             state.quarantineDelayHours != lastRenderedDelayHours ||
             state.useGlobalDelay != lastRenderedUseGlobal ||
@@ -1885,6 +1889,7 @@ class MainActivity : Activity() {
             return
         }
 
+        lastRenderedEnabled = state.enabled
         lastRenderedAllowed = displayAllowed
         lastRenderedPending = state.pendingRequests
         lastRenderedDelayHours = state.quarantineDelayHours
@@ -1894,6 +1899,68 @@ class MainActivity : Activity() {
 
         installBlocksContainer.removeAllViews()
         val now = System.currentTimeMillis()
+
+        // Toggle Whitelist (Active / Inactive)
+        val toggleCard = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(14), dp(12), dp(14), dp(12))
+            background = roundedBackground(if (state.enabled) Color.parseColor("#152C22") else Color.parseColor("#2C1D1D"))
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = dp(10) }
+
+            val infoLayout = LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+
+                addView(TextView(this@MainActivity).apply {
+                    text = if (state.enabled) "🛡️ Whitelist ACTIVE (Zero-Trust)" else "🔓 Whitelist INACTIVE"
+                    setTextColor(if (state.enabled) Color.parseColor("#4CAF50") else Color.parseColor("#E57373"))
+                    textSize = 14f
+                    typeface = Typeface.DEFAULT_BOLD
+                })
+                addView(TextView(this@MainActivity).apply {
+                    text = if (state.enabled)
+                        "Seules les applications autorisées peuvent s'ouvrir."
+                    else
+                        "Toutes les applications sont accessibles librement (mode permissif)."
+                    setTextColor(Color.parseColor("#90A4AE"))
+                    textSize = 12f
+                    setPadding(0, dp(2), dp(8), 0)
+                })
+            }
+            addView(infoLayout)
+
+            if (!BuildConfig.WHITELIST_ADB_ONLY) {
+                val toggleBtn = Button(this@MainActivity).apply {
+                    text = if (state.enabled) "Désactiver" else "Activer"
+                    textSize = 12f
+                    setTextColor(Color.WHITE)
+                    background = roundedBackground(if (state.enabled) Color.parseColor("#C62828") else Color.parseColor("#2E7D32"))
+                    setPadding(dp(12), dp(6), dp(12), dp(6))
+                    setOnClickListener {
+                        if (state.enabled) {
+                            AlertDialog.Builder(this@MainActivity, android.R.style.Theme_DeviceDefault_Dialog)
+                                .setTitle("Désactiver la Whitelist ?")
+                                .setMessage("Toutes les applications seront accessibles librement et démasquées sur l'appareil.")
+                                .setPositiveButton("Désactiver") { _, _ ->
+                                    WhitelistManager.setWhitelistEnabled(this@MainActivity, false)
+                                    refreshInstallBlocksUI(force = true)
+                                }
+                                .setNegativeButton("Annuler", null)
+                                .show()
+                        } else {
+                            WhitelistManager.setWhitelistEnabled(this@MainActivity, true)
+                            refreshInstallBlocksUI(force = true)
+                        }
+                    }
+                }
+                addView(toggleBtn)
+            }
+        }
+        installBlocksContainer.addView(toggleCard)
 
         // 0. Configuration du Délai de Quarantaine
         val effectiveHours = WhitelistManager.getEffectiveQuarantineDelayHours(this)

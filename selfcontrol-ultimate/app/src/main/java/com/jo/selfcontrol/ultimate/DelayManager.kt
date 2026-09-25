@@ -465,15 +465,17 @@ object DelayManager {
     fun checkUninstallEligibility(context: Context): Pair<Boolean, String?> {
         val now = System.currentTimeMillis()
 
-        // 1. Vérifier la Whitelist
+        // 1. Vérifier la Whitelist (uniquement si activée)
         try {
             val wlState = WhitelistManager.loadState(context)
-            if (!wlState.useGlobalDelay) {
-                return false to "La Whitelist utilise un délai dédié (${wlState.quarantineDelayHours}h). Alignez-la sur le délai général."
-            }
-            if (wlState.pendingDelayExecuteAt > now) {
-                val rem = ((wlState.pendingDelayExecuteAt - now) / 1000)
-                return false to "Une modification du délai Whitelist est encore en attente (${formatDuration(rem)} restantes)."
+            if (wlState.enabled) {
+                if (!wlState.useGlobalDelay) {
+                    return false to "La Whitelist utilise un délai dédié (${wlState.quarantineDelayHours}h). Alignez-la sur le délai général."
+                }
+                if (wlState.pendingDelayExecuteAt > now) {
+                    val rem = ((wlState.pendingDelayExecuteAt - now) / 1000)
+                    return false to "Une modification du délai Whitelist est encore en attente (${formatDuration(rem)} restantes)."
+                }
             }
         } catch (e: Exception) {
             Log.e(TAG, "Error checking Whitelist eligibility: ${e.message}")

@@ -208,7 +208,7 @@ object WhitelistManager {
     )
 
     data class WhitelistState(
-        val enabled: Boolean = true,
+        val enabled: Boolean = false,
         val allowedPackages: Set<String> = INITIAL_ALLOWED_PACKAGES,
         val pendingRequests: List<PendingRequest> = emptyList(),
         val quarantineDelayHours: Int = DEFAULT_DELAY_HOURS,
@@ -231,7 +231,7 @@ object WhitelistManager {
         val file = File(ctx.filesDir, STATE_FILE)
         if (!file.exists()) {
             val initialAllowed = getInitialAllowedPackages(ctx)
-            val defaultState = WhitelistState(allowedPackages = initialAllowed)
+            val defaultState = WhitelistState(enabled = false, allowedPackages = initialAllowed)
             saveState(ctx, defaultState)
             return defaultState
         }
@@ -242,7 +242,7 @@ object WhitelistManager {
         }
         return try {
             val json = JSONObject(file.readText())
-            val enabled = json.optBoolean("enabled", true)
+            val enabled = json.optBoolean("enabled", false)
             val allowedArr = json.optJSONArray("allowed_packages") ?: JSONArray()
             val rawAllowed = (0 until allowedArr.length()).map { allowedArr.getString(it) }.toSet()
             // Clean up any guarded/system packages if present
@@ -557,6 +557,35 @@ object WhitelistManager {
             return true
         }
         return false
+    }
+
+    /**
+     * Enables or disables the whitelist.
+     * When disabled, any quarantined / hidden packages are immediately released.
+     * When enabled, enforcement runs across installed packages.
+     */
+    fun setWhitelistEnabled(ctx: Context, enabled: Boolean, fromAdb: Boolean = false): Boolean {
+        if (BuildConfig.WHITELIST_ADB_ONLY && !fromAdb) {
+            Log.w(TAG, "Refused UI whitelist toggle: flavor requires ADB")
+            return false
+        }
+        synchronized(this) {
+            val state = loadState(ctx)
+            if (state.enabled == enabled) return true
+            saveState(ctx, state.copy(enabled = enabled))
+            if (enabled) {
+                enforce(ctx)
+            } else {
+                val hidden = loadHiddenState(ctx)
+                for (pkg in hidden) {
+                    release(ctx, pkg)
+                }
+                saveHiddenState(ctx, emptySet())
+            }
+            Log.w(TAG, "Whitelist ${if (enabled) "ENABLED" else "DISABLED"}")
+            EventLog.log(ctx, "WHITELIST", "Whitelist ${if (enabled) "ENABLED" else "DISABLED"}")
+            return true
+        }
     }
 
     fun isWhitelisted(ctx: Context, pkg: String): Boolean {

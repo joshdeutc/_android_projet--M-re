@@ -73,107 +73,7 @@ class AppWatcherService : AccessibilityService() {
         // Cooldown to avoid HOME spamming loop
         private const val HOME_COOLDOWN_MS = 500L
 
-        private const val INSTAGRAM_PACKAGE = "com.instagram.android"
-
-        /**
-         * View ids marking a screen the user gets sent away from: the home feed, Explore, people
-         * search, Reels.
-         *
-         * Matched on ids and never on visible text: the labels are localised — this device reports
-         * "Rechercher et explorer" — so text matching would break on a language change, while ids are
-         * identical in every locale. All of these were read off the live node tree of this device.
-         *
-         * Still Instagram's names to change at any release, so this fails open — see
-         * [enforceInstagramRestrictions].
-         */
-        private val INSTAGRAM_REDIRECT_IDS = listOf(
-            "com.instagram.android:id/main_feed_action_bar",          // home feed
-            "com.instagram.android:id/explore_action_bar",            // Explore grid
-            "com.instagram.android:id/action_bar_search_edit_text",   // people search
-            // Reels builds a different container depending on how it was opened, so all the observed
-            // variants are listed. Matching only `clips_viewer_container` fired on Reels reached one
-            // way and stayed blind on the other.
-            "com.instagram.android:id/clips_viewer_container",
-            "com.instagram.android:id/clips_viewer_view_pager",
-            "com.instagram.android:id/clips_expanded_touch_view",
-            "com.instagram.android:id/root_clips_layout",
-            "com.instagram.android:id/clips_swipe_refresh_container",
-            "com.instagram.android:id/clips_video_container"
-        )
-
-        /**
-         * Screens left by deep link rather than by tapping the messages tab.
-         *
-         * On Explore and in search, Instagram reads a tab tap as "dismiss search" and returns to the
-         * previously selected tab — the feed. The feed rule then fires and does reach the messages, but
-         * only after the anti-loop delay, so the user visibly stopped on the feed along the way. The
-         * deep link goes straight to the inbox and skips the detour.
-         */
-        private val INSTAGRAM_PREFER_DEEPLINK_IDS = setOf(
-            "com.instagram.android:id/explore_action_bar",
-            "com.instagram.android:id/action_bar_search_edit_text"
-        )
-
-        /**
-         * Screens that veto a redirect — the inbox and an open conversation. Being here means the user
-         * is already where we would send them, so no stray match can become a redirect loop.
-         *
-         * Exact ids, not a `direct_`/`message_` prefix: `direct_tab` is the bottom-bar button present
-         * on every screen we mean to leave, and a Reel's comment composer is close enough in naming
-         * that a loose prefix vetoed the redirect on any commented Reel.
-         */
-        private val INSTAGRAM_INBOX_IDS = listOf(
-            "com.instagram.android:id/direct_inbox_action_bar",
-            "com.instagram.android:id/direct_thread_header"
-        )
-
-        /**
-         * Floor between two screen checks.
-         *
-         * Instagram emits content-change events continuously — video frames, comment lists — and the
-         * first version answered every one of them with a recursive walk of thousands of nodes on the
-         * accessibility thread. That produced an "app not responding" on Custos. Everything below runs
-         * behind this gate, and the check itself is now a handful of native id lookups rather than a
-         * tree walk.
-         */
-        private const val INSTAGRAM_SCAN_INTERVAL_MS = 80L
         private const val SCREEN_RULE_SCAN_INTERVAL_MS = 80L
-
-        /** The bottom-bar messages tab — the thing we tap to perform the redirect. */
-        private const val INSTAGRAM_DIRECT_TAB_VIEW_ID = "com.instagram.android:id/direct_tab"
-
-        /**
-         * The bottom bar, left to right on this device: feed, Reels, messages, search, profile.
-         *
-         * Reading which one is selected is the only screen test that survives scrolling — every
-         * content marker tried so far collapses out of view when the feed is scrolled down.
-         */
-        private val INSTAGRAM_TAB_VIEW_IDS = listOf(
-            "com.instagram.android:id/feed_tab",
-            "com.instagram.android:id/clips_tab",
-            INSTAGRAM_DIRECT_TAB_VIEW_ID,
-            "com.instagram.android:id/search_tab",
-            "com.instagram.android:id/profile_tab"
-        )
-
-        /**
-         * Tabs the user is sent away from. The profile is deliberately absent — it was never part of
-         * what had to be closed, and it is how you reach your own posts and settings.
-         */
-        private val INSTAGRAM_REDIRECTED_TABS = setOf(
-            "com.instagram.android:id/feed_tab",
-            "com.instagram.android:id/clips_tab",
-            "com.instagram.android:id/search_tab"
-        )
-
-        /**
-         * Deep link to the message inbox, used when the bottom bar is not on screen to be tapped.
-         * The package is pinned on the intent so this can never escape to a browser.
-         */
-        private const val INSTAGRAM_INBOX_URI = "https://www.instagram.com/direct/inbox/"
-
-        /** Long enough that one redirect settles before the next content event triggers another. */
-        private const val INSTAGRAM_REDIRECT_COOLDOWN_MS = 500L
         private const val SCREEN_RULE_REDIRECT_COOLDOWN_MS = 500L
 
         @Volatile
@@ -220,21 +120,8 @@ class AppWatcherService : AccessibilityService() {
         }
 
         /**
-         * Re-check the Instagram screen from outside the accessibility event stream.
-         *
-         * Called every tick by LimitService while Instagram is in the foreground, because events
-         * alone are not enough: a feed sitting on a still photo emits nothing, so the redirect only
-         * ever fired while the app happened to be animating. The check is rate-gated internally, so
-         * calling it once a second costs almost nothing.
-         */
-        fun recheckInstagram() {
-            instance?.enforceInstagramRestrictions()
-        }
-
-        /**
-         * Re-check learned rules for [pkg] outside the event stream, for the same reason
-         * [recheckInstagram] exists: a screen sitting still emits no accessibility events, so
-         * event-driven checks go blind exactly when the user has stopped moving.
+         * Re-check learned rules for [pkg] outside the event stream: a screen sitting
+         * still emits no accessibility events, so periodic checks keep enforcement active.
          */
         fun recheckScreenRules(pkg: String) {
             if (ScreenLearnSession.isActive) return
@@ -255,9 +142,6 @@ class AppWatcherService : AccessibilityService() {
      */
     private var imePackage: String? = null
     private var lastHomeActionTime = 0L
-    private var lastInstagramBackTime = 0L
-    private var lastInstagramScanTime = 0L
-    private var lastInstagramDiagTime = 0L
 
     private var overlayView: TextView? = null
     private val overlayHandler = Handler(Looper.getMainLooper())
@@ -343,233 +227,7 @@ class AppWatcherService : AccessibilityService() {
         return true
     }
 
-    /**
-     * Keep the official Instagram app on the messages: leaving for the feed, Explore, search or
-     * Reels sends the user straight back to the inbox.
-     *
-     * Redirecting rather than [goHome], because the app has to stay usable for conversations —
-     * ejecting to the launcher would make Instagram unusable instead of narrow. Instagram is a
-     * single-activity app whose screens are fragments, which is why there is no window class to test
-     * as there is for Settings; the node tree is the only thing that says which screen is up, and
-     * a tab switch fires no window-state event at all.
-     *
-     * Two limits worth being honest about. This is **reactive**: the feed renders, then we leave it,
-     * so a glimpse is unavoidable — a WebView blocks by URL and never paints the page. And it **fails
-     * open**: if Instagram renames these ids, nothing throws and nothing logs, the redirect simply
-     * stops happening. The `IG_REDIRECT` lines in the event log are the only way to notice, by their
-     * absence.
-     */
-    private fun enforceInstagramRestrictions(): Boolean {
-        // Rate gate first, before touching a single node: this runs on the accessibility thread and
-        // Instagram fires content changes continuously.
-        val now = System.currentTimeMillis()
-        if (now - lastInstagramScanTime < INSTAGRAM_SCAN_INTERVAL_MS) return false
-        lastInstagramScanTime = now
 
-        // Both questions below are about what is *on screen*, so they look at the active window only.
-        // Searching every window instead made the feature fire exactly once per session: after the
-        // first redirect the conversation's window stays in the window list even once the user has
-        // gone back to the feed, so the inbox veto matched forever and silenced everything after it.
-        // All-window search is needed for one thing only — finding the bottom bar to tap.
-        val root = rootInActiveWindow
-        if (root == null) {
-            diagInstagram("root=null")
-            return false
-        }
-
-        // The bottom bar is asked first, because it is the only signal that survives scrolling.
-        // Content markers like `main_feed_action_bar` collapse out of sight as soon as the feed is
-        // scrolled down, which let the user out simply by swiping before the redirect landed — and let
-        // them back in when they scrolled up again. Which tab is selected does not move.
-        val selectedTab = instagramSelectedTab(root)
-        if (selectedTab == INSTAGRAM_DIRECT_TAB_VIEW_ID) return false
-
-        val hit = when (selectedTab) {
-            in INSTAGRAM_REDIRECTED_TABS -> selectedTab
-            // No tab reported as selected: either the bar is hidden (full-screen Reels, an open
-            // conversation) or this build of Instagram does not expose the state. Fall back to the
-            // visible-content markers, which is the previous behaviour.
-            else -> {
-                val veto = INSTAGRAM_INBOX_IDS.firstOrNull { hasViewId(root, it) }
-                if (veto != null) null else INSTAGRAM_REDIRECT_IDS.firstOrNull { hasViewId(root, it) }
-            }
-        }
-
-        if (hit == null) {
-            diagInstagram("no redirect — tab=${selectedTab?.removePrefix("com.instagram.android:id/") ?: "none"} tabs=[${tabStates(root)}]")
-            return false
-        }
-
-        if (now - lastInstagramBackTime < INSTAGRAM_REDIRECT_COOLDOWN_MS) return false
-        lastInstagramBackTime = now
-
-        // Tapping the tab is preferred: it is what a finger would do and it keeps Instagram's own
-        // navigation state intact. The deep link is the fallback for screens where the bar cannot be
-        // reached. BACK is deliberately not used: in the Reels player it merely steps to the previous
-        // reel, which is how this first shipped and why nothing appeared to happen.
-        val how = if (hit in INSTAGRAM_PREFER_DEEPLINK_IDS) {
-            when {
-                openInstagramInbox() -> "deeplink"
-                tapInstagramDirectTab() -> "tab"
-                else -> "failed"
-            }
-        } else {
-            when {
-                tapInstagramDirectTab() -> "tab"
-                openInstagramInbox() -> "deeplink"
-                else -> "failed"
-            }
-        }
-        Log.w(TAG, "🛡️ Instagram: $hit → messages ($how)")
-        EventLog.log(this, "IG_REDIRECT", "$hit → DM ($how)")
-        return how != "failed"
-    }
-
-    /**
-     * Jump to the message inbox by deep link — the way out of screens that hide the bottom bar.
-     *
-     * The package is pinned so the URL can never fall through to a browser, which would hand the
-     * user the very web feed we are keeping them away from.
-     */
-    private fun openInstagramInbox(): Boolean = try {
-        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(INSTAGRAM_INBOX_URI)).apply {
-            setPackage(INSTAGRAM_PACKAGE)
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        }
-        startActivity(intent)
-        true
-    } catch (e: Exception) {
-        Log.w(TAG, "Instagram inbox deep link failed: ${e.message}")
-        false
-    }
-
-    /**
-     * Diagnostic for the redirect decision, throttled to one line every two seconds.
-     *
-     * Temporary: it exists because reasoning from the outside kept producing wrong theories about why
-     * the redirect did or did not fire. It reports which window was inspected and which ids were
-     * actually there, which is the only thing that settles it.
-     */
-    private fun diagInstagram(detail: String) {
-        val now = System.currentTimeMillis()
-        if (now - lastInstagramDiagTime < 2_000L) return
-        lastInstagramDiagTime = now
-        Log.i(TAG, "IG diag: $detail")
-    }
-
-    /**
-     * Which bottom-bar tab is currently selected, or null when the bar is absent or reports nothing.
-     *
-     * Both `isSelected` and `isChecked` are consulted because widgets differ in which one they set and
-     * Instagram's choice is not documented. A build that populates neither simply yields null and the
-     * caller falls back to content markers — so this degrades to the previous behaviour rather than
-     * breaking. [tabStates] exists so the log says which of the two is actually used.
-     */
-    private fun instagramSelectedTab(root: AccessibilityNodeInfo): String? {
-        for (id in INSTAGRAM_TAB_VIEW_IDS) {
-            val selected = try {
-                root.findAccessibilityNodeInfosByViewId(id)
-                    .any { it.isVisibleToUser && (it.isSelected || it.isChecked) }
-            } catch (e: Exception) {
-                false
-            }
-            if (selected) return id
-        }
-        return null
-    }
-
-    /** Raw selected/checked/visible state of every tab, for the log. */
-    private fun tabStates(root: AccessibilityNodeInfo): String =
-        INSTAGRAM_TAB_VIEW_IDS.joinToString(" ") { id ->
-            val short = id.removePrefix("com.instagram.android:id/")
-            val nodes = try {
-                root.findAccessibilityNodeInfosByViewId(id)
-            } catch (e: Exception) {
-                emptyList()
-            }
-            if (nodes.isEmpty()) "$short=absent"
-            else nodes.joinToString(",") { "$short=s${it.isSelected}/c${it.isChecked}/v${it.isVisibleToUser}" }
-        }
-
-    /**
-     * Whether [viewId] is present in [root]'s tree **and actually on screen**.
-     *
-     * The visibility test is the whole point. Instagram's main activity is one `ViewPager`
-     * (`swipeable_tab_view_pager`) that keeps every tab's fragment alive at once, so the inbox, the
-     * feed and Reels all exist in the tree permanently — only one of them is visible. Testing mere
-     * presence made the inbox veto match while the user was on the feed, which silenced the redirect
-     * from the first visit to the messages onward: before that first visit the fragment did not exist
-     * yet, which is exactly why it appeared to work once per session and then stop.
-     */
-    private fun hasViewId(root: AccessibilityNodeInfo, viewId: String): Boolean = try {
-        root.findAccessibilityNodeInfosByViewId(viewId).any { it.isVisibleToUser }
-    } catch (e: Exception) {
-        false
-    }
-
-    /**
-     * First node carrying [viewId] in any window, or null.
-     *
-     * Searches every window and not just `rootInActiveWindow`, because Instagram puts the bottom bar
-     * and the Reels player in separate windows — the active-window tree showed the player without the
-     * bar, which is why the tab tap kept failing. `flagRetrieveInteractiveWindows` in the service
-     * config is what makes [windows] usable here.
-     *
-     * The lookup is the framework's own native search, so it stays cheap enough to run on the
-     * accessibility thread — unlike the recursive walk this replaced, which caused an ANR.
-     */
-    private fun findNodeInAnyWindow(viewId: String): AccessibilityNodeInfo? {
-        try {
-            for (window in windows) {
-                val root = window.root ?: continue
-                // Visible only: the bottom bar exists off-screen in the pager too, and tapping the
-                // coordinates of an invisible copy would land somewhere arbitrary.
-                root.findAccessibilityNodeInfosByViewId(viewId)
-                    .firstOrNull { it.isVisibleToUser }
-                    ?.let { return it }
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "findNodeInAnyWindow($viewId) failed: ${e.message}")
-        }
-        return try {
-            rootInActiveWindow?.findAccessibilityNodeInfosByViewId(viewId)
-                ?.firstOrNull { it.isVisibleToUser }
-        } catch (e: Exception) {
-            null
-        }
-    }
-
-    /**
-     * Tap the centre of the messages tab.
-     *
-     * A gesture rather than `ACTION_CLICK`: the id sits on the icon, which is not itself clickable,
-     * and walking up to the first clickable ancestor lands on the whole bottom bar — clicking that
-     * selects nothing in particular and leaves Instagram on an indeterminate screen. Dispatching a
-     * real tap at the icon's own coordinates is what the user's finger does, so the tab reacts the
-     * way it always does. Requires `canPerformGestures` in the service config.
-     */
-    private fun tapInstagramDirectTab(): Boolean = try {
-        val icon = findNodeInAnyWindow(INSTAGRAM_DIRECT_TAB_VIEW_ID)
-        if (icon == null) {
-            false
-        } else {
-            val bounds = Rect()
-            icon.getBoundsInScreen(bounds)
-            if (bounds.isEmpty) {
-                false
-            } else {
-                Log.i(TAG, "Instagram DM tab bounds=$bounds → tap ${bounds.exactCenterX()},${bounds.exactCenterY()}")
-                val path = Path().apply { moveTo(bounds.exactCenterX(), bounds.exactCenterY()) }
-                val gesture = GestureDescription.Builder()
-                    .addStroke(GestureDescription.StrokeDescription(path, 0L, 10L))
-                    .build()
-                dispatchGesture(gesture, null, null)
-            }
-        }
-    } catch (e: Exception) {
-        Log.w(TAG, "Instagram DM tab tap failed: ${e.message}")
-        false
-    }
 
     private fun handleWindowChanged(packageName: String, event: AccessibilityEvent) {
         if (packageName == "com.jo.selfcontrol.ultimate") return
@@ -606,9 +264,6 @@ class AppWatcherService : AccessibilityService() {
             }
         }
 
-        if (packageName == INSTAGRAM_PACKAGE && enforceInstagramRestrictions()) {
-            return
-        }
 
         // Learned rules never fire while a session is teaching one: the user is being asked to visit
         // the very screen we would send them away from.
@@ -653,15 +308,7 @@ class AppWatcherService : AccessibilityService() {
     }
 
     private fun handleContentChanged(packageName: String) {
-        // Instagram swaps fragments inside one activity, so switching to Explore fires only a
-        // content change — never a window state change. Without this hook the block would catch a
-        // cold start on Explore and nothing else, which is the case that almost never happens.
-        if (packageName == INSTAGRAM_PACKAGE) {
-            enforceInstagramRestrictions()
-            return
-        }
-
-        // Same reasoning for learned rules: a tab switch inside a single-activity app is a content
+        // Learned rules: a tab switch inside a single-activity app is a content
         // change and nothing else.
         if (!ScreenLearnSession.isActive && enforceScreenRules(packageName)) {
             return

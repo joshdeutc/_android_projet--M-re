@@ -61,6 +61,7 @@ class CommandReceiver : BroadcastReceiver() {
                 handleImportInstallBlocks(context, intent.getStringExtra("path"))
             "com.jo.selfcontrol.ultimate.UNINSTALL_RESULT" -> handleUninstallResult(context, intent)
             "com.jo.selfcontrol.ultimate.STATUS_WHITELIST" -> handleStatusWhitelist(context)
+            "com.jo.selfcontrol.ultimate.SET_WHITELIST_ENABLED" -> handleSetWhitelistEnabled(context, intent)
             "com.jo.selfcontrol.ultimate.SET_WHITELIST_DELAY" -> handleSetWhitelistDelay(context, intent)
             "com.jo.selfcontrol.ultimate.ENFORCE_WHITELIST" -> handleEnforceWhitelist(context)
             "com.jo.selfcontrol.ultimate.REQUEST_WHITELIST_APP" -> handleRequestWhitelistApp(context, intent)
@@ -263,6 +264,12 @@ class CommandReceiver : BroadcastReceiver() {
             val remainMin = (req.availableAt - System.currentTimeMillis()) / 60000
             Log.w("SelfControl.Cmd", "    - ${req.packageName} (unlocks in ${remainMin}m at ${java.util.Date(req.availableAt)})")
         }
+    }
+
+    private fun handleSetWhitelistEnabled(context: Context, intent: Intent) {
+        val enabled = intent.getBooleanExtra("enabled", false)
+        val res = WhitelistManager.setWhitelistEnabled(context, enabled, fromAdb = true)
+        Log.w("SelfControl.Cmd", "=== SET_WHITELIST_ENABLED ($enabled): $res ===")
     }
 
     private fun handleSetWhitelistDelay(context: Context, intent: Intent) {
