@@ -331,7 +331,7 @@ class AppWatcherService : AccessibilityService() {
     }
 
     /**
-     * Sends BACK + HOME with a cooldown to avoid event loops.
+     * Sends HOME with a cooldown to avoid event loops.
      */
     private fun goHome(reason: String): Boolean {
         val now = System.currentTimeMillis()
@@ -339,7 +339,6 @@ class AppWatcherService : AccessibilityService() {
         lastHomeActionTime = now
         Log.w(TAG, "🛡️ Protection activated: $reason — returning home")
         EventLog.log(this, "HOME", "forced home: $reason (fg=$currentForegroundApp)")
-        performGlobalAction(GLOBAL_ACTION_BACK)
         performGlobalAction(GLOBAL_ACTION_HOME)
         return true
     }
