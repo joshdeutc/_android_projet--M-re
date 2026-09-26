@@ -410,11 +410,11 @@ object ScreenRuleManager {
                 allowedIds = o.optJSONArray("allowed_ids")?.let { a ->
                     (0 until a.length()).map { a.getString(it) }
                 } ?: emptyList(),
-                escapeTapId = o.optString("escape_tap_id").ifBlank { null },
+                escapeTapId = o.optString("escape_tap_id").takeIf { it.isNotBlank() && it != "null" },
                 escapeTapIndex = o.optInt("escape_tap_index", 0),
-                escapeDeeplink = o.optString("escape_deeplink").ifBlank { null },
-                protectionDelaySec = if (o.has("protection_delay_sec")) o.getInt("protection_delay_sec") else null,
-                blockedHours = if (o.has("blocked_hours")) o.getString("blocked_hours").ifBlank { null } else null,
+                escapeDeeplink = o.optString("escape_deeplink").takeIf { it.isNotBlank() && it != "null" },
+                protectionDelaySec = if (o.has("protection_delay_sec") && !o.isNull("protection_delay_sec")) o.getInt("protection_delay_sec") else null,
+                blockedHours = if (o.has("blocked_hours")) o.optString("blocked_hours").takeIf { it.isNotBlank() && it != "null" } else null,
                 successes = o.optInt("successes", 0),
                 failures = o.optInt("failures", 0)
             )

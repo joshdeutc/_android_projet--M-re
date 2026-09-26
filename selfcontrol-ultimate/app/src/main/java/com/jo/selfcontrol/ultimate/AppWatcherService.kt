@@ -171,6 +171,17 @@ class AppWatcherService : AccessibilityService() {
             if (ScreenLearnSession.isActive) return
             instance?.enforceScreenRules(pkg)
         }
+
+        /**
+         * Force immediate reload of screen rules from disk.
+         */
+        fun reloadScreenRules() {
+            instance?.let {
+                it.screenRulesStamp = 0L
+                it.screenRulesCheckedAt = 0L
+                it.reloadScreenRulesIfStale(System.currentTimeMillis())
+            }
+        }
     }
 
     private var appLabel: String = "Custos"
@@ -189,6 +200,7 @@ class AppWatcherService : AccessibilityService() {
     private var lastInstagramBackTime = 0L
     private var lastInstagramScanTime = 0L
     private var lastInstagramDiagTime = 0L
+    private var currentActivityName: String = ""
 
     private var overlayView: TextView? = null
     private val overlayHandler = Handler(Looper.getMainLooper())
@@ -280,6 +292,9 @@ class AppWatcherService : AccessibilityService() {
         if (packageName == "com.jo.selfcontrol.ultimate") return
 
         val className = event.className?.toString() ?: ""
+        if (className.isNotEmpty()) {
+            currentActivityName = className
+        }
 
         val isDialog = className.contains("Dialog", ignoreCase = true)
             || className.contains("Popup", ignoreCase = true)
@@ -719,8 +734,12 @@ class AppWatcherService : AccessibilityService() {
         Log.i(TAG, "Screen rules reloaded: ${screenRules.size}")
     }
 
-    /** Whether [viewId] (or text marker `text:...`, or desc marker `desc:...`) is on screen right now, in one of [pkg]'s windows. */
+    /** Whether [viewId] (or text marker `text:...`, or desc marker `desc:...`, or activity marker `activity:...`) is on screen right now, in one of [pkg]'s windows. */
     private fun visibleIdPresent(pkg: String, viewId: String): Boolean {
+        if (viewId.startsWith("activity:")) {
+            val act = viewId.removePrefix("activity:")
+            return currentForegroundApp == pkg && currentActivityName.contains(act, ignoreCase = true)
+        }
         try {
             for (window in windows) {
                 val root = window.root ?: continue
@@ -768,16 +787,23 @@ class AppWatcherService : AccessibilityService() {
         val how = when {
             escapeTapId != null &&
                 tapNavItem(pkg, escapeTapId, rule.escapeTapIndex) -> "tap"
+            rule.escapeDeeplink == "back" && performGlobalAction(GLOBAL_ACTION_BACK) -> "back"
+            rule.escapeDeeplink == "home" && goHome("${rule.name}_home") -> "home"
             rule.escapeDeeplink != null && openDeeplink(pkg, rule.escapeDeeplink) -> "deeplink"
             pkg == "com.snapchat.android" && tapSnapchatChat() -> "snapchat_chat_coords"
             performGlobalAction(GLOBAL_ACTION_BACK) -> "back"
+            goHome("${rule.name}_escape") -> "home"
             else -> "failed"
         }
-        val shortHit = hit.substringAfter(":id/")
+        val shortHit = hit.substringAfter(":id/").removePrefix("activity:")
         Log.w(TAG, "🛡️ ${rule.name}: $shortHit → escape ($how)")
 
         overlayHandler.postDelayed({
-            val reached = rule.allowedIds.any { visibleIdPresent(pkg, it) }
+            val reached = if (rule.allowedIds.isNotEmpty()) {
+                rule.allowedIds.any { visibleIdPresent(pkg, it) }
+            } else {
+                !rule.blockedIds.any { visibleIdPresent(pkg, it) }
+            }
             ScreenRuleManager.recordOutcome(this, rule.name, reached)
             Log.w(TAG, "   ${rule.name}: destination ${if (reached) "atteinte" else "NON atteinte"}")
             EventLog.log(

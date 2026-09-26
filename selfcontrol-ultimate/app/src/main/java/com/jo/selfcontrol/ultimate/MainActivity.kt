@@ -4400,7 +4400,12 @@ class MainActivity : Activity() {
             ).show()
             return
         }
-        val apps = getInstalledLaunchableApps()
+        val apps = getInstalledLaunchableApps().toMutableList()
+        // Include Google Password Manager as an available entry
+        apps.add(0, AppInfo(
+            packageName = "com.google.android.gms",
+            label = "Gestionnaire de mots de passe Google"
+        ))
         val selected = mutableSetOf<String>()
         val listView = buildAppCheckListView(apps, selected)
         val dialog = AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog)
@@ -4410,6 +4415,15 @@ class MainActivity : Activity() {
                 val pkg = selected.firstOrNull()
                 if (pkg == null) {
                     Toast.makeText(this, "Pick an app.", Toast.LENGTH_SHORT).show()
+                } else if (pkg == "com.google.android.gms") {
+                    askGooglePasswordManagerDetails()
+                } else if (pkg == "com.instagram.android") {
+                    val existing = ScreenRuleManager.load(this).filter { it.packageName == pkg }
+                    if (existing.isEmpty()) {
+                        askInstagramRuleChoice()
+                    } else {
+                        askScreenRuleDetails(pkg, apps.firstOrNull { it.packageName == pkg }?.label ?: pkg)
+                    }
                 } else {
                     askScreenRuleDetails(pkg, apps.firstOrNull { it.packageName == pkg }?.label ?: pkg)
                 }
@@ -4418,6 +4432,108 @@ class MainActivity : Activity() {
             .create()
         styleDialogForDarkTheme(dialog)
         dialog.show()
+    }
+
+    private fun askGooglePasswordManagerDetails() {
+        val existingRules = ScreenRuleManager.load(this)
+        val existing = existingRules.firstOrNull { it.packageName == "com.google.android.gms" }
+        if (existing != null) {
+            Toast.makeText(this, "La règle Gestionnaire de mots de passe existe déjà.", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        val layout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), dp(8), dp(16), 0)
+            addView(TextView(this@MainActivity).apply {
+                text = "🛡️ Bloque l'accès complet au Gestionnaire de mots de passe Google (via compte Google, paramètres, raccourci ou Chrome)."
+                setTextColor(Color.DKGRAY)
+                textSize = 13f
+                setPadding(0, 0, 0, dp(12))
+            })
+        }
+
+        var pickedTimer: Int? = if (ScreenRuleManager.PERMANENT_ON_THIS_FLAVOR) null else 360 * 60
+
+        if (!ScreenRuleManager.PERMANENT_ON_THIS_FLAVOR) {
+            val timerRow = buildProtectionTimerRow(pickedTimer) { picked ->
+                pickedTimer = picked
+            }
+            layout.addView(timerRow)
+        } else {
+            layout.addView(TextView(this).apply {
+                text = "🔒 Permanent sur le flavor me — le retrait se fait uniquement par commande adb."
+                setTextColor(Color.parseColor("#D32F2F"))
+                textSize = 12f
+                setPadding(0, dp(12), 0, dp(4))
+            })
+        }
+
+        val dialog = AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog)
+            .setTitle("Gestionnaire de mots de passe Google")
+            .setView(layout)
+            .setPositiveButton("Activer le blocage") { _, _ ->
+                val delaySec = if (ScreenRuleManager.PERMANENT_ON_THIS_FLAVOR) 0 else (pickedTimer ?: 0)
+                val newRule = ScreenRuleManager.ScreenRule(
+                    name = "Gestionnaire de mots de passe",
+                    packageName = "com.google.android.gms",
+                    blockedIds = listOf(
+                        "activity:PasswordManagerActivity",
+                        "activity:AutofillManagePasswordsActivity",
+                        "com.google.android.gms:id/home_screen_coordinator_layout",
+                        "com.google.android.gms:id/navigate_to_credentials_screen",
+                        "com.google.android.gms:id/home_screen_view_pager"
+                    ),
+                    allowedIds = emptyList(),
+                    escapeTapId = null,
+                    escapeTapIndex = 0,
+                    escapeDeeplink = "back",
+                    protectionDelaySec = delaySec
+                )
+                ScreenRuleManager.save(this, existingRules + newRule)
+                AppWatcherService.reloadScreenRules()
+                refreshPartialAccessUI()
+                Toast.makeText(this, "Protection du Gestionnaire de mots de passe activée !", Toast.LENGTH_LONG).show()
+            }
+            .setNegativeButton("Cancel", null)
+            .create()
+        styleDialogForDarkTheme(dialog)
+        dialog.show()
+    }
+
+    private fun askInstagramRuleChoice() {
+        AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog)
+            .setTitle("Instagram")
+            .setMessage("Voulez-vous activer la règle 'DMs uniquement' optimisée (bloque le fil d'actualité, Explore et Reels tout en conservant les messages) ?")
+            .setPositiveButton("DMs uniquement") { _, _ ->
+                val existingRules = ScreenRuleManager.load(this)
+                val newRule = ScreenRuleManager.ScreenRule(
+                    name = "Instagram (DMs uniquement)",
+                    packageName = "com.instagram.android",
+                    blockedIds = listOf(
+                        "com.instagram.android:id/main_feed_action_bar",
+                        "com.instagram.android:id/explore_action_bar",
+                        "com.instagram.android:id/clips_viewer_container"
+                    ),
+                    allowedIds = listOf(
+                        "com.instagram.android:id/direct_inbox_action_bar",
+                        "com.instagram.android:id/direct_thread_header"
+                    ),
+                    escapeTapId = "com.instagram.android:id/direct_tab",
+                    escapeTapIndex = 0,
+                    escapeDeeplink = "https://www.instagram.com/direct/inbox/",
+                    protectionDelaySec = if (ScreenRuleManager.PERMANENT_ON_THIS_FLAVOR) 0 else 360 * 60
+                )
+                ScreenRuleManager.save(this, existingRules + newRule)
+                AppWatcherService.reloadScreenRules()
+                refreshPartialAccessUI()
+                Toast.makeText(this, "Règle Instagram (DMs uniquement) activée !", Toast.LENGTH_LONG).show()
+            }
+            .setNeutralButton("Personnalisé") { _, _ ->
+                askScreenRuleDetails("com.instagram.android", "Instagram")
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
     }
 
     private fun askScreenRuleDetails(pkg: String, label: String) {
